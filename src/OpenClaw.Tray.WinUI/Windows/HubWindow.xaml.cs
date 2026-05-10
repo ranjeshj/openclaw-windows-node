@@ -7,6 +7,7 @@ using OpenClawTray.Pages;
 using OpenClawTray.Services;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using WinUIEx;
 
@@ -59,6 +60,26 @@ public sealed partial class HubWindow : WindowEx
     public VoiceService? VoiceServiceInstance { get; set; }
     public string? NodeFullDeviceId { get; set; }
 
+    private AppModel? _appModel;
+    internal AppModel? AppModel
+    {
+        get => _appModel;
+        set
+        {
+            if (_appModel != null)
+            {
+                _appModel.PropertyChanged -= OnModelPropertyChanged;
+                _appModel.AgentEventAdded -= OnModelAgentEventAdded;
+            }
+            _appModel = value;
+            if (_appModel != null)
+            {
+                _appModel.PropertyChanged += OnModelPropertyChanged;
+                _appModel.AgentEventAdded += OnModelAgentEventAdded;
+            }
+        }
+    }
+
     // Cached gateway data — pages read these on navigation
     public SessionInfo[]? LastSessions { get; private set; }
     public ChannelHealth[]? LastChannels { get; private set; }
@@ -80,7 +101,7 @@ public sealed partial class HubWindow : WindowEx
         InitializeComponent();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
-        Closed += (s, e) => IsClosed = true;
+        Closed += (s, e) => { IsClosed = true; AppModel = null; };
 
         this.SetWindowSize(900, 650);
         this.CenterOnScreen();
@@ -538,6 +559,149 @@ public sealed partial class HubWindow : WindowEx
                 if (IsClosed) return;
                 if (ContentFrame?.Content is InstancesPage ip) ip.UpdatePresenceData(data);
                 if (ContentFrame?.Content is NodesPage np) np.UpdatePresence(data);
+            });
+        }
+        catch { }
+    }
+
+    private void OnModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (IsClosed || _appModel == null) return;
+        try
+        {
+            DispatcherQueue?.TryEnqueue(() =>
+            {
+                if (IsClosed || _appModel == null) return;
+                switch (e.PropertyName)
+                {
+                    case nameof(Services.AppModel.Status):
+                        CurrentStatus = _appModel.Status;
+                        _cachedCommands = null;
+                        if (_appModel.Status == ConnectionStatus.Disconnected)
+                            _lastGatewaySelf = null;
+                        UpdateTitleBarStatus(_appModel.Status);
+                        if (ContentFrame?.Content is HomePage homePage)
+                            homePage.UpdateConnectionStatus(_appModel.Status, Settings?.GetEffectiveGatewayUrl());
+                        if (ContentFrame?.Content is ConnectionPage connectionPage)
+                            connectionPage.UpdateStatus(_appModel.Status);
+                        break;
+                    case nameof(Services.AppModel.GatewaySelf):
+                        _lastGatewaySelf = _appModel.GatewaySelf;
+                        UpdateTitleBarStatus(CurrentStatus);
+                        if (ContentFrame?.Content is AboutPage about)
+                            about.RefreshGatewayInfo();
+                        break;
+                    case nameof(Services.AppModel.Sessions):
+                        LastSessions = _appModel.Sessions;
+                        if (ContentFrame?.Content is SessionsPage sp) sp.UpdateSessions(_appModel.Sessions);
+                        else if (ContentFrame?.Content is ConversationsPage convos) convos.UpdateSessions(_appModel.Sessions);
+                        else if (ContentFrame?.Content is HomePage home2) home2.UpdateSessions(_appModel.Sessions);
+                        break;
+                    case nameof(Services.AppModel.Channels):
+                        LastChannels = _appModel.Channels;
+                        if (ContentFrame?.Content is ChannelsPage cp) cp.UpdateChannels(_appModel.Channels);
+                        break;
+                    case nameof(Services.AppModel.Usage):
+                        LastUsage = _appModel.Usage;
+                        if (ContentFrame?.Content is UsagePage up1) up1.UpdateUsage(_appModel.Usage!);
+                        break;
+                    case nameof(Services.AppModel.UsageCost):
+                        LastUsageCost = _appModel.UsageCost;
+                        if (ContentFrame?.Content is UsagePage up2) up2.UpdateUsageCost(_appModel.UsageCost!);
+                        break;
+                    case nameof(Services.AppModel.UsageStatus):
+                        LastUsageStatus = _appModel.UsageStatus;
+                        if (ContentFrame?.Content is UsagePage up3) up3.UpdateUsageStatus(_appModel.UsageStatus!);
+                        break;
+                    case nameof(Services.AppModel.Nodes):
+                        LastNodes = _appModel.Nodes;
+                        if (ContentFrame?.Content is NodesPage np) np.UpdateNodes(_appModel.Nodes);
+                        else if (ContentFrame?.Content is HomePage home3) home3.UpdateNodes(_appModel.Nodes);
+                        break;
+                    case nameof(Services.AppModel.NodePairList):
+                        LastNodePairList = _appModel.NodePairList;
+                        if (ContentFrame?.Content is NodesPage np2 && _appModel.NodePairList != null) np2.UpdatePairingRequests(_appModel.NodePairList);
+                        break;
+                    case nameof(Services.AppModel.DevicePairList):
+                        LastDevicePairList = _appModel.DevicePairList;
+                        if (_appModel.DevicePairList != null)
+                        {
+                            if (ContentFrame?.Content is NodesPage np3) np3.UpdateDevicePairingRequests(_appModel.DevicePairList);
+                            if (ContentFrame?.Content is ConnectionPage cp2) cp2.UpdateDevicePairingRequests(_appModel.DevicePairList);
+                        }
+                        break;
+                    case nameof(Services.AppModel.ModelsList):
+                        LastModelsList = _appModel.ModelsList;
+                        if (ContentFrame?.Content is SessionsPage sp2 && _appModel.ModelsList != null) sp2.UpdateModelsList(_appModel.ModelsList);
+                        break;
+                    case nameof(Services.AppModel.Presence):
+                        LastPresence = _appModel.Presence;
+                        if (_appModel.Presence != null)
+                        {
+                            if (ContentFrame?.Content is InstancesPage ip) ip.UpdatePresenceData(_appModel.Presence);
+                            if (ContentFrame?.Content is NodesPage np4) np4.UpdatePresence(_appModel.Presence);
+                        }
+                        break;
+                    case nameof(Services.AppModel.AgentsList):
+                        LastAgentsData = _appModel.AgentsList;
+                        if (_appModel.AgentsList.HasValue)
+                        {
+                            RebuildAgentNavItems(_appModel.AgentsList.Value);
+                            if (ContentFrame?.Content is HomePage home4) home4.UpdateAgentsList(_appModel.AgentsList.Value);
+                        }
+                        break;
+                    case nameof(Services.AppModel.Config):
+                        if (_appModel.Config.HasValue)
+                        {
+                            LastConfig = _appModel.Config;
+                            if (ContentFrame?.Content is ConfigPage cfgP) cfgP.UpdateConfig(_appModel.Config.Value);
+                            else if (ContentFrame?.Content is BindingsPage bp) bp.UpdateConfig(_appModel.Config.Value);
+                        }
+                        break;
+                    case nameof(Services.AppModel.ConfigSchema):
+                        if (_appModel.ConfigSchema.HasValue)
+                        {
+                            LastConfigSchema = _appModel.ConfigSchema;
+                            if (ContentFrame?.Content is ConfigPage cfgP2) cfgP2.UpdateConfigSchema(_appModel.ConfigSchema.Value);
+                        }
+                        break;
+                    case nameof(Services.AppModel.CronList):
+                        if (_appModel.CronList.HasValue && ContentFrame?.Content is CronPage cronP)
+                            cronP.UpdateFromGateway(_appModel.CronList.Value);
+                        break;
+                    case nameof(Services.AppModel.CronStatus):
+                        if (_appModel.CronStatus.HasValue && ContentFrame?.Content is CronPage cronP2)
+                            cronP2.UpdateFromGateway(_appModel.CronStatus.Value);
+                        break;
+                    case nameof(Services.AppModel.SkillsStatus):
+                        if (_appModel.SkillsStatus.HasValue && ContentFrame?.Content is SkillsPage skillsP)
+                            skillsP.UpdateFromGateway(_appModel.SkillsStatus.Value);
+                        break;
+                    case nameof(Services.AppModel.AgentFilesList):
+                        if (_appModel.AgentFilesList.HasValue && ContentFrame?.Content is WorkspacePage wp)
+                            wp.UpdateAgentFilesList(_appModel.AgentFilesList.Value);
+                        break;
+                    case nameof(Services.AppModel.AgentFileContent):
+                        if (_appModel.AgentFileContent.HasValue && ContentFrame?.Content is WorkspacePage wp2)
+                            wp2.UpdateAgentFileContent(_appModel.AgentFileContent.Value);
+                        break;
+                }
+            });
+        }
+        catch { }
+    }
+
+    private void OnModelAgentEventAdded(AgentEventInfo evt)
+    {
+        try
+        {
+            DispatcherQueue?.TryEnqueue(() =>
+            {
+                if (IsClosed) return;
+                _agentEvents.Insert(0, evt);
+                if (_agentEvents.Count > MaxAgentEvents)
+                    _agentEvents.RemoveRange(MaxAgentEvents, _agentEvents.Count - MaxAgentEvents);
+                if (ContentFrame?.Content is AgentEventsPage agentEvents) agentEvents.AddEvent(evt);
             });
         }
         catch { }
