@@ -110,6 +110,10 @@ public sealed partial class ChatPanel : UserControl
             {
                 _trackedStreamingMessage = lastMsg;
                 _trackedStreamingMessage.PropertyChanged += OnStreamingMessagePropertyChanged;
+
+                // Start periodic re-scroll timer during streaming
+                EnsureScrollTimer();
+                _scrollThrottleTimer!.Start();
             }
         }
     }
@@ -120,6 +124,9 @@ public sealed partial class ChatPanel : UserControl
         {
             _trackedStreamingMessage.PropertyChanged -= OnStreamingMessagePropertyChanged;
             _trackedStreamingMessage = null;
+
+            // Stop periodic re-scroll when no longer streaming
+            _scrollThrottleTimer?.Stop();
         }
     }
 
@@ -292,59 +299,43 @@ public sealed partial class ChatPanel : UserControl
     }
 
     /// <summary>
-    /// Request a scroll-to-bottom. During streaming, requests are coalesced
-    /// via a 100ms throttle timer so we scroll only after layout settles.
+    /// Request a scroll-to-bottom. Coalesced via flag — only one scroll
+    /// per layout pass. Uses DispatcherQueue at Normal priority to run
+    /// after the current layout cycle completes.
     /// </summary>
     private void RequestScrollToBottom()
     {
         if (_scrollPending) return;
         _scrollPending = true;
 
-        // Use a timer to let the layout pass complete before reading ScrollableHeight.
-        // This avoids jitter from ChangeView firing before ItemsRepeater finishes layout.
-        EnsureScrollTimer();
-        if (!_scrollThrottleTimer!.IsRunning)
-            _scrollThrottleTimer.Start();
+        DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Normal, () =>
+        {
+            _scrollPending = false;
+            if (_autoScrollEnabled)
+                ScrollToBottom();
+        });
     }
 
     private void EnsureScrollTimer()
     {
+        // Timer used for periodic re-scroll during streaming
         if (_scrollThrottleTimer != null) return;
         _scrollThrottleTimer = DispatcherQueue.CreateTimer();
-        _scrollThrottleTimer.Interval = TimeSpan.FromMilliseconds(100);
-        _scrollThrottleTimer.IsRepeating = false;
+        _scrollThrottleTimer.Interval = TimeSpan.FromMilliseconds(150);
+        _scrollThrottleTimer.IsRepeating = true;
         _scrollThrottleTimer.Tick += OnScrollThrottleTick;
     }
 
     private void OnScrollThrottleTick(DispatcherQueueTimer sender, object args)
     {
-        _scrollPending = false;
-        if (_autoScrollEnabled)
+        // Periodic re-scroll while streaming to catch layout changes
+        if (_autoScrollEnabled && _trackedStreamingMessage != null)
             ScrollToBottom();
     }
 
     private void ScrollToBottom()
     {
         _programmaticScrollGen++;
-
-        // Try BringIntoView on the last realized element — this lets WinUI
-        // compute the correct scroll offset after layout, avoiding stale ScrollableHeight.
-        var count = ViewModel?.Messages.Count ?? 0;
-        if (count > 0)
-        {
-            var lastElement = MessageList.TryGetElement(count - 1);
-            if (lastElement is UIElement el)
-            {
-                el.StartBringIntoView(new BringIntoViewOptions
-                {
-                    AnimationDesired = false,
-                    VerticalAlignmentRatio = 1.0, // align bottom
-                });
-                return;
-            }
-        }
-
-        // Fallback: direct ChangeView (element not realized or no messages)
         MessageScrollViewer.ChangeView(null, MessageScrollViewer.ScrollableHeight, null, disableAnimation: true);
     }
 
