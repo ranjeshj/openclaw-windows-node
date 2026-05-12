@@ -122,6 +122,14 @@ public partial class ChatMessage : ObservableObject
         Content = _contentBuffer.ToString();
     }
 
+    /// <summary>Replace content with full cumulative text (for non-delta streaming).</summary>
+    public void SetContent(string fullText)
+    {
+        _contentBuffer.Clear();
+        _contentBuffer.Append(fullText);
+        Content = fullText;
+    }
+
     /// <summary>Finalize the message after streaming completes.</summary>
     public void FinalizeContent()
     {

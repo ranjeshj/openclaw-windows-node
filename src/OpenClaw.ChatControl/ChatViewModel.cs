@@ -349,15 +349,18 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         {
             lock (_streamLock)
             {
-                if (!IsActiveRunEvent(e.RunId))
+                if (!IsActiveRunEvent(e.RunId) || _activeStreamingMessage == null)
                     return;
 
-                if (_activeStreamingMessage!.Status == MessageStatus.Thinking)
+                if (_activeStreamingMessage.Status == MessageStatus.Thinking)
                 {
                     _activeStreamingMessage.BeginStreaming(e.RunId);
                 }
 
-                _activeStreamingMessage.AppendDelta(e.Delta);
+                if (e.IsFullText)
+                    _activeStreamingMessage.SetContent(e.Delta);
+                else
+                    _activeStreamingMessage.AppendDelta(e.Delta);
             }
         });
     }

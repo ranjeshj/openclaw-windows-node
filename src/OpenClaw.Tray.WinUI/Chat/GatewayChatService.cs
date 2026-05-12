@@ -207,13 +207,14 @@ public sealed class GatewayChatService : IChatService, IDisposable
                     }
                     else
                     {
-                        var delta = ExtractDeltaText(evt);
+                        var (delta, isFullText) = ExtractDeltaTextWithMode(evt);
                         if (!string.IsNullOrEmpty(delta))
                         {
                             DeltaReceived?.Invoke(this, new ChatStreamDelta
                             {
                                 RunId = evt.RunId,
-                                Delta = delta
+                                Delta = delta,
+                                IsFullText = isFullText
                             });
                         }
                     }
@@ -294,16 +295,22 @@ public sealed class GatewayChatService : IChatService, IDisposable
     private static DateTimeOffset TimestampFromEvent(AgentEventInfo evt)
         => evt.Ts > 0 ? DateTimeOffset.FromUnixTimeMilliseconds((long)evt.Ts) : DateTimeOffset.UtcNow;
 
-    private static string? ExtractDeltaText(AgentEventInfo evt)
+    private static (string? text, bool isFullText) ExtractDeltaTextWithMode(AgentEventInfo evt)
     {
         if (evt.Data.ValueKind == JsonValueKind.Object)
         {
-            if (evt.Data.TryGetProperty("delta", out var delta))
-                return delta.GetString();
-            if (evt.Data.TryGetProperty("text", out var text))
-                return text.GetString();
+            // Prefer delta (incremental) over text (cumulative)
+            if (evt.Data.TryGetProperty("delta", out var delta) && delta.ValueKind == JsonValueKind.String)
+                return (delta.GetString(), false);
+            if (evt.Data.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String)
+                return (text.GetString(), true); // Full cumulative text — replace, don't append
         }
-        return evt.Summary;
+        return (evt.Summary, false);
+    }
+
+    private static string? ExtractDeltaText(AgentEventInfo evt)
+    {
+        return ExtractDeltaTextWithMode(evt).text;
     }
 
     private static ChatLifecyclePhase? ExtractLifecyclePhase(AgentEventInfo evt)

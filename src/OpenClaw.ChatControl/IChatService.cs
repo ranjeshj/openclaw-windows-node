@@ -91,6 +91,8 @@ public sealed class ChatStreamDelta : EventArgs
 {
     public required string RunId { get; init; }
     public required string Delta { get; init; }
+    /// <summary>When true, Delta contains the full cumulative text (replace, don't append).</summary>
+    public bool IsFullText { get; init; }
 }
 
 /// <summary>A run lifecycle event (start, end, error).</summary>
