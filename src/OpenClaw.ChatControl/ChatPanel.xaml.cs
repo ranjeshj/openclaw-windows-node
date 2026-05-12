@@ -152,6 +152,11 @@ public sealed partial class ChatPanel : UserControl
             case nameof(ChatViewModel.IsConnected):
                 UpdateNoticeBanner();
                 break;
+            case nameof(ChatViewModel.SelectedModel):
+                InputBox.FooterLabel = ViewModel!.SelectedModel != null
+                    ? $"OpenClaw Native Chat \u00b7 {ViewModel.SelectedModel}"
+                    : "OpenClaw Native Chat";
+                break;
         }
     }
 
@@ -255,6 +260,18 @@ public sealed partial class ChatPanel : UserControl
                 break;
             }
         }
+    }
+
+    private void OnResetSessionRequested(object sender, EventArgs e)
+    {
+        _autoScrollEnabled = true;
+        ScrollToBottomButton.Visibility = Visibility.Collapsed;
+        ViewModel?.SendCommand.Execute("/reset");
+    }
+
+    private void OnCompactSessionRequested(object sender, EventArgs e)
+    {
+        ViewModel?.SendCommand.Execute("/compact");
     }
 
     private void OnCloseClick(object sender, RoutedEventArgs e)

@@ -25,6 +25,12 @@ public sealed partial class ChatInputBox : UserControl
     /// <summary>Fired when the user clicks "Copy Last Response" in the more menu.</summary>
     public event EventHandler? CopyLastResponseRequested;
 
+    /// <summary>Fired when the user clicks "Reset Session" in the more menu.</summary>
+    public event EventHandler? ResetSessionRequested;
+
+    /// <summary>Fired when the user clicks "Compact Session" in the more menu.</summary>
+    public event EventHandler? CompactSessionRequested;
+
     /// <summary>
     /// Whether an agent run is currently active.
     /// Toggles between Send and Stop button visibility.
@@ -47,6 +53,20 @@ public sealed partial class ChatInputBox : UserControl
         }
     }
     private bool _isRunActive;
+
+    /// <summary>
+    /// The label displayed in the footer area (e.g. "OpenClaw Native Chat" or with model name).
+    /// </summary>
+    public string FooterLabel
+    {
+        get => _footerLabel;
+        set
+        {
+            _footerLabel = value;
+            FooterText.Text = value;
+        }
+    }
+    private string _footerLabel = "OpenClaw Native Chat";
 
     /// <summary>Clear the input text box.</summary>
     public void ClearInput()
@@ -115,5 +135,15 @@ public sealed partial class ChatInputBox : UserControl
     private void OnCopyLastResponseClick(object sender, RoutedEventArgs e)
     {
         CopyLastResponseRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnResetSessionClick(object sender, RoutedEventArgs e)
+    {
+        ResetSessionRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnCompactSessionClick(object sender, RoutedEventArgs e)
+    {
+        CompactSessionRequested?.Invoke(this, EventArgs.Empty);
     }
 }

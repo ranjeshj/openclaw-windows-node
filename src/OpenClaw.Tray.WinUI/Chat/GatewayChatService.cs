@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,6 +26,7 @@ public sealed class GatewayChatService : IChatService, IDisposable
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _client.AgentEventReceived += OnAgentEvent;
         _client.StatusChanged += OnClientStatusChanged;
+        _client.SessionsUpdated += OnSessionsUpdated;
     }
 
     public event EventHandler<ChatStreamDelta>? DeltaReceived;
@@ -32,6 +34,7 @@ public sealed class GatewayChatService : IChatService, IDisposable
     public event EventHandler<ChatToolCallEvent>? ToolCallReceived;
     public event EventHandler<ChatReasoningEvent>? ReasoningReceived;
     public event EventHandler<ChatStatusEvent>? StatusReceived;
+    public event EventHandler<ChatInjectEvent>? MessageInjected;
 
     public bool IsConnected { get; private set; } = true;
     public event EventHandler<bool>? ConnectionStateChanged;
@@ -47,6 +50,16 @@ public sealed class GatewayChatService : IChatService, IDisposable
         {
             Reconnected?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    public async Task<bool> CheckHealthAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            await _client.CheckHealthAsync();
+            return true;
+        }
+        catch { return false; }
     }
 
     public async Task<IReadOnlyList<ChatMessage>> LoadHistoryAsync(CancellationToken ct = default)
@@ -113,9 +126,8 @@ public sealed class GatewayChatService : IChatService, IDisposable
         try
         {
             await _client.RequestSessionsAsync();
-            // Sessions come via SessionsUpdated event - return empty for now
-            // Real implementation would await the event or cache
-            return Array.Empty<ChatSessionInfo>();
+            // Return cached sessions (updated via SessionsUpdated event)
+            return _cachedSessions;
         }
         catch { return Array.Empty<ChatSessionInfo>(); }
     }
@@ -150,6 +162,16 @@ public sealed class GatewayChatService : IChatService, IDisposable
     {
         await _client.PatchSessionAsync("main", model: model);
     }
+
+    private void OnSessionsUpdated(object? sender, SessionInfo[] sessions)
+    {
+        _cachedSessions = sessions.Select(s => new ChatSessionInfo(
+            s.Key ?? "",
+            s.DisplayName ?? s.Key ?? "Session",
+            s.UpdatedAt)).ToArray();
+    }
+
+    private ChatSessionInfo[] _cachedSessions = Array.Empty<ChatSessionInfo>();
 
     private void OnAgentEvent(object? sender, AgentEventInfo evt)
     {
@@ -468,5 +490,6 @@ public sealed class GatewayChatService : IChatService, IDisposable
         _disposed = true;
         _client.AgentEventReceived -= OnAgentEvent;
         _client.StatusChanged -= OnClientStatusChanged;
+        _client.SessionsUpdated -= OnSessionsUpdated;
     }
 }

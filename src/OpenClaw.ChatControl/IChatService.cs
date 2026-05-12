@@ -60,6 +60,12 @@ public interface IChatService
     /// <summary>Fired when a status event occurs (info, warning, error notifications).</summary>
     event EventHandler<ChatStatusEvent>? StatusReceived;
 
+    /// <summary>Check if the backend is reachable.</summary>
+    Task<bool> CheckHealthAsync(CancellationToken ct = default);
+
+    /// <summary>Fired when the service injects a message (e.g. server-pushed notes).</summary>
+    event EventHandler<ChatInjectEvent>? MessageInjected;
+
     /// <summary>Whether the service is currently connected to the backend.</summary>
     bool IsConnected { get; }
 
@@ -71,6 +77,13 @@ public interface IChatService
     /// Consumers should refresh state (e.g. reload history).
     /// </summary>
     event EventHandler? Reconnected;
+}
+
+/// <summary>Payload for a message injected by the service.</summary>
+public sealed class ChatInjectEvent : EventArgs
+{
+    public required string Text { get; init; }
+    public MessageRole Role { get; init; } = MessageRole.System;
 }
 
 /// <summary>A streaming text delta for an active agent run.</summary>

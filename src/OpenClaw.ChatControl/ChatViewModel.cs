@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,6 +21,11 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
     private ChatMessage? _activeStreamingMessage;
     private System.Threading.Timer? _pendingRunTimer;
     private bool _disposed;
+
+    private static readonly HashSet<string> s_resetCommands = new(StringComparer.OrdinalIgnoreCase)
+        { "/new", "/reset", "/clear" };
+
+    private DateTimeOffset _lastCompactTime;
 
     /// <summary>
     /// Create a new ChatViewModel.
@@ -44,6 +50,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         _service.StatusReceived += OnStatusReceived;
         _service.ConnectionStateChanged += OnConnectionStateChanged;
         _service.Reconnected += OnReconnected;
+        _service.MessageInjected += OnMessageInjected;
     }
 
     /// <summary>All messages in the current session.</summary>
@@ -121,11 +128,12 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         ErrorMessage = null;
         var trimmed = text.Trim();
 
-        // Handle /new as a session reset: send to gateway, clear, reload
-        if (trimmed.Equals("/new", StringComparison.OrdinalIgnoreCase))
+        // Intercept known slash commands
+        if (trimmed.StartsWith("/", StringComparison.Ordinal))
         {
-            await HandleNewSessionAsync(trimmed);
-            return;
+            var handled = await HandleSlashCommandAsync(trimmed);
+            if (handled) return;
+            // Unknown slash command — fall through and send as regular text
         }
 
         // Add user message to the list immediately
@@ -174,13 +182,78 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>
+    /// Handle known slash commands. Returns true if the command was recognized and handled.
+    /// </summary>
+    private async Task<bool> HandleSlashCommandAsync(string command)
+    {
+        var lower = command.Trim().ToLowerInvariant();
+
+        if (s_resetCommands.Contains(lower))
+        {
+            await HandleNewSessionAsync(lower);
+            return true;
+        }
+
+        if (lower == "/compact")
+        {
+            if (IsRunActive)
+            {
+                _dispatchToUI(() => ErrorMessage = "Cannot compact while a run is active.");
+                return true;
+            }
+            if (DateTimeOffset.UtcNow - _lastCompactTime < TimeSpan.FromSeconds(60))
+            {
+                _dispatchToUI(() => ErrorMessage = "Compact cooldown \u2014 wait 60 seconds.");
+                return true;
+            }
+            try
+            {
+                _lastCompactTime = DateTimeOffset.UtcNow;
+                await _service.CompactSessionAsync(ct: _sessionCts?.Token ?? default);
+                _dispatchToUI(() =>
+                {
+                    Messages.Clear();
+                    IsHistoryLoaded = false;
+                });
+                await LoadHistoryAsync();
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                _dispatchToUI(() => ErrorMessage = $"Compact failed: {ex.Message}");
+            }
+            return true;
+        }
+
+        if (lower.StartsWith("/model "))
+        {
+            var model = command[7..].Trim();
+            if (!string.IsNullOrEmpty(model))
+            {
+                try
+                {
+                    await _service.SetModelAsync(model, _sessionCts?.Token ?? default);
+                    _dispatchToUI(() => SelectedModel = model);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    _dispatchToUI(() => ErrorMessage = $"Failed to set model: {ex.Message}");
+                }
+            }
+            return true;
+        }
+
+        // Unknown slash command — not handled
+        return false;
+    }
+
     private async Task HandleNewSessionAsync(string command)
     {
         try
         {
-            // Send /new to gateway — it creates a new session
-            var idempotencyKey = Guid.NewGuid().ToString("N");
-            await _service.SendAsync(command, idempotencyKey, _sessionCts?.Token ?? default);
+            await _service.ResetSessionAsync(ct: _sessionCts?.Token ?? default);
 
             // Clear local state
             _dispatchToUI(() =>
@@ -413,6 +486,18 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         _dispatchToUI(() => IsConnected = connected);
     }
 
+    private void OnMessageInjected(object? sender, ChatInjectEvent e)
+    {
+        _dispatchToUI(() =>
+        {
+            var msg = new ChatMessage(
+                id: Guid.NewGuid().ToString("N"),
+                role: e.Role,
+                content: e.Text);
+            Messages.Add(msg);
+        });
+    }
+
     private void OnReconnected(object? sender, EventArgs e)
     {
         _dispatchToUI(() =>
@@ -491,6 +576,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         _service.StatusReceived -= OnStatusReceived;
         _service.ConnectionStateChanged -= OnConnectionStateChanged;
         _service.Reconnected -= OnReconnected;
+        _service.MessageInjected -= OnMessageInjected;
 
         CancelPendingRunTimer();
 

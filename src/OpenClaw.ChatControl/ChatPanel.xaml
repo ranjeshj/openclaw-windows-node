@@ -220,6 +220,8 @@
                             SendRequested="OnSendRequested"
                             AbortRequested="OnAbortRequested"
                             NewChatRequested="OnNewChatRequested"
-                            CopyLastResponseRequested="OnCopyLastResponseRequested"/>
+                            CopyLastResponseRequested="OnCopyLastResponseRequested"
+                            ResetSessionRequested="OnResetSessionRequested"
+                            CompactSessionRequested="OnCompactSessionRequested"/>
     </Grid>
 </UserControl>
