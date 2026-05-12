@@ -218,10 +218,9 @@ public sealed class MockChatService : IChatService
 
         // ── 12. Tool in-progress (spinner) ──
         history.Add(new(Id(), MessageRole.User, "Start a long running task", now.AddMinutes(-5)));
-        var running = new ChatMessage(Id(), MessageRole.Assistant, "",
+        var running = new ChatMessage(Id(), MessageRole.Assistant,
+            "Working on your request...",
             now.AddMinutes(-4)) { SenderLabel = "Assistant", ModelName = "gpt-5.5" };
-        running.Status = MessageStatus.Streaming;
-        running.IsStreaming = true;
         running.ToolCalls.Add(new ToolCallInfo("tc-running", "task")
         {
             Phase = ToolCallPhase.Running, ArgsJson = "{\n  \"name\": \"long-analysis\",\n  \"prompt\": \"Analyze the entire codebase...\"\n}"
