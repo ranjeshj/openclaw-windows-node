@@ -18,6 +18,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
     private readonly object _streamLock = new();
     private CancellationTokenSource? _sessionCts;
     private ChatMessage? _activeStreamingMessage;
+    private System.Threading.Timer? _pendingRunTimer;
     private bool _disposed;
 
     /// <summary>
@@ -34,11 +35,15 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         _dispatchToUI = dispatchToUI ?? throw new ArgumentNullException(nameof(dispatchToUI));
         _sessionCts = new CancellationTokenSource();
 
+        IsConnected = _service.IsConnected;
+
         _service.DeltaReceived += OnDeltaReceived;
         _service.LifecycleChanged += OnLifecycleChanged;
         _service.ToolCallReceived += OnToolCallReceived;
         _service.ReasoningReceived += OnReasoningReceived;
         _service.StatusReceived += OnStatusReceived;
+        _service.ConnectionStateChanged += OnConnectionStateChanged;
+        _service.Reconnected += OnReconnected;
     }
 
     /// <summary>All messages in the current session.</summary>
@@ -59,6 +64,13 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
     /// <summary>Whether history has been loaded.</summary>
     [ObservableProperty]
     public partial bool IsHistoryLoaded { get; private set; }
+
+    /// <summary>Whether the chat service is connected to the backend.</summary>
+    [ObservableProperty]
+    public partial bool IsConnected { get; private set; } = true;
+
+    /// <summary>Pending run timeout in milliseconds. Default 120 000 ms (2 minutes).</summary>
+    internal int PendingRunTimeoutMs { get; set; } = 120_000;
 
     /// <summary>Load conversation history from the backend.</summary>
     public async Task LoadHistoryAsync()
@@ -137,6 +149,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
                     _activeStreamingMessage = assistantMsg;
                 }
 
+                StartPendingRunTimer();
                 Messages.Add(assistantMsg);
             });
         }
@@ -189,6 +202,8 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
     private async Task AbortAsync()
     {
         if (_disposed) return;
+
+        CancelPendingRunTimer();
 
         string? runIdToAbort;
         lock (_streamLock)
@@ -286,11 +301,16 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
                         {
                             _activeStreamingMessage.ModelName = e.Model;
                         }
+                        if (_activeStreamingMessage != null && string.IsNullOrEmpty(_activeStreamingMessage.SenderLabel))
+                        {
+                            _activeStreamingMessage.SenderLabel = "Assistant";
+                        }
                         break;
 
                     case ChatLifecyclePhase.End:
                         if (IsActiveRunEvent(e.RunId))
                         {
+                            CancelPendingRunTimer();
                             if (e.InputTokens.HasValue) _activeStreamingMessage!.InputTokens = e.InputTokens;
                             if (e.OutputTokens.HasValue) _activeStreamingMessage!.OutputTokens = e.OutputTokens;
                             if (e.ContextPercent.HasValue) _activeStreamingMessage!.ContextPercent = e.ContextPercent;
@@ -306,6 +326,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
                     case ChatLifecyclePhase.Error:
                         if (IsActiveRunEvent(e.RunId))
                         {
+                            CancelPendingRunTimer();
                             _activeStreamingMessage!.MarkError(e.ErrorMessage);
                             _activeStreamingMessage = null;
                             ActiveRunId = null;
@@ -376,6 +397,66 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         });
     }
 
+    private void OnConnectionStateChanged(object? sender, bool connected)
+    {
+        _dispatchToUI(() => IsConnected = connected);
+    }
+
+    private void OnReconnected(object? sender, EventArgs e)
+    {
+        _dispatchToUI(() =>
+        {
+            // Clear any active streaming state so the UI is clean before reload
+            lock (_streamLock)
+            {
+                if (_activeStreamingMessage != null)
+                {
+                    _activeStreamingMessage.IsStreaming = false;
+                    _activeStreamingMessage = null;
+                }
+                ActiveRunId = null;
+                IsRunActive = false;
+            }
+            CancelPendingRunTimer();
+        });
+
+        // Reload history to pick up any messages that arrived while disconnected
+        _ = LoadHistoryAsync();
+    }
+
+    private void StartPendingRunTimer()
+    {
+        CancelPendingRunTimer();
+        _pendingRunTimer = new System.Threading.Timer(
+            _ => _dispatchToUI(OnPendingRunTimedOut),
+            null,
+            PendingRunTimeoutMs,
+            Timeout.Infinite);
+    }
+
+    private void CancelPendingRunTimer()
+    {
+        _pendingRunTimer?.Dispose();
+        _pendingRunTimer = null;
+    }
+
+    private void OnPendingRunTimedOut()
+    {
+        lock (_streamLock)
+        {
+            if (!IsRunActive) return;
+
+            if (_activeStreamingMessage != null)
+            {
+                _activeStreamingMessage.MarkError("Timed out waiting for a reply");
+                _activeStreamingMessage = null;
+            }
+            ActiveRunId = null;
+            IsRunActive = false;
+            ErrorMessage = "Timed out waiting for a reply";
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -386,6 +467,10 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         _service.ToolCallReceived -= OnToolCallReceived;
         _service.ReasoningReceived -= OnReasoningReceived;
         _service.StatusReceived -= OnStatusReceived;
+        _service.ConnectionStateChanged -= OnConnectionStateChanged;
+        _service.Reconnected -= OnReconnected;
+
+        CancelPendingRunTimer();
 
         _sessionCts?.Cancel();
         _sessionCts?.Dispose();

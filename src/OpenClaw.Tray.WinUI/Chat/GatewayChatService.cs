@@ -23,6 +23,7 @@ public sealed class GatewayChatService : IChatService, IDisposable
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _client.AgentEventReceived += OnAgentEvent;
+        _client.StatusChanged += OnClientStatusChanged;
     }
 
     public event EventHandler<ChatStreamDelta>? DeltaReceived;
@@ -30,6 +31,22 @@ public sealed class GatewayChatService : IChatService, IDisposable
     public event EventHandler<ChatToolCallEvent>? ToolCallReceived;
     public event EventHandler<ChatReasoningEvent>? ReasoningReceived;
     public event EventHandler<ChatStatusEvent>? StatusReceived;
+
+    public bool IsConnected { get; private set; } = true;
+    public event EventHandler<bool>? ConnectionStateChanged;
+    public event EventHandler? Reconnected;
+
+    private void OnClientStatusChanged(object? sender, ConnectionStatus status)
+    {
+        var wasConnected = IsConnected;
+        IsConnected = status == ConnectionStatus.Connected;
+        ConnectionStateChanged?.Invoke(this, IsConnected);
+
+        if (!wasConnected && IsConnected)
+        {
+            Reconnected?.Invoke(this, EventArgs.Empty);
+        }
+    }
 
     public async Task<IReadOnlyList<ChatMessage>> LoadHistoryAsync(CancellationToken ct = default)
     {
@@ -47,11 +64,16 @@ public sealed class GatewayChatService : IChatService, IDisposable
                     _ => MessageRole.System
                 };
 
-                messages.Add(new ChatMessage(
+                var chatMsg = new ChatMessage(
                     id: $"hist-{msg.Ts}",
                     role: role,
                     content: msg.Content,
-                    timestamp: msg.Timestamp));
+                    timestamp: msg.Timestamp);
+
+                if (role == MessageRole.Assistant)
+                    chatMsg.SenderLabel = "Assistant";
+
+                messages.Add(chatMsg);
             }
 
             return messages;
@@ -144,6 +166,16 @@ public sealed class GatewayChatService : IChatService, IDisposable
                             OutputTokens = ExtractIntField(evt.Data, "outputTokens"),
                             ContextPercent = ExtractIntField(evt.Data, "contextPercent"),
                         });
+
+                        if (phase == ChatLifecyclePhase.Error)
+                        {
+                            StatusReceived?.Invoke(this, new ChatStatusEvent
+                            {
+                                RunId = evt.RunId,
+                                Text = ExtractErrorMessage(evt) ?? "Agent error",
+                                Tone = ChatTone.Error
+                            });
+                        }
                     }
                     break;
 
@@ -167,6 +199,23 @@ public sealed class GatewayChatService : IChatService, IDisposable
                         ToolCallReceived?.Invoke(this, toolEvent);
                     }
                     break;
+
+                case "error":
+                    var errorText = evt.Data.ValueKind == JsonValueKind.Object && evt.Data.TryGetProperty("reason", out var reason)
+                        ? reason.GetString() ?? "Unknown error"
+                        : evt.Summary ?? "Stream error";
+                    StatusReceived?.Invoke(this, new ChatStatusEvent
+                    {
+                        RunId = evt.RunId,
+                        Text = errorText,
+                        Tone = ChatTone.Error
+                    });
+                    break;
+
+                case "item":
+                    // Item events carry structured content items (e.g., input audio, response items).
+                    // Log for now; no UI rendering needed yet.
+                    break;
             }
         }
         catch (Exception ex)
@@ -174,6 +223,9 @@ public sealed class GatewayChatService : IChatService, IDisposable
             Logger.Warn($"[GatewayChatService] Error processing agent event: {ex.Message}");
         }
     }
+
+    private static DateTimeOffset TimestampFromEvent(AgentEventInfo evt)
+        => evt.Ts > 0 ? DateTimeOffset.FromUnixTimeMilliseconds((long)evt.Ts) : DateTimeOffset.UtcNow;
 
     private static string? ExtractDeltaText(AgentEventInfo evt)
     {
@@ -347,5 +399,6 @@ public sealed class GatewayChatService : IChatService, IDisposable
         if (_disposed) return;
         _disposed = true;
         _client.AgentEventReceived -= OnAgentEvent;
+        _client.StatusChanged -= OnClientStatusChanged;
     }
 }

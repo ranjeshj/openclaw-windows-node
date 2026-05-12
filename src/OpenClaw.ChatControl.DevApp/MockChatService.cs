@@ -32,7 +32,11 @@ public sealed class MockChatService : IChatService
     public event EventHandler<ChatReasoningEvent>? ReasoningReceived;
 #pragma warning disable CS0067 // Event never used — required by IChatService interface
     public event EventHandler<ChatStatusEvent>? StatusReceived;
+    public event EventHandler<bool>? ConnectionStateChanged;
+    public event EventHandler? Reconnected;
 #pragma warning restore CS0067
+
+    public bool IsConnected => true;
 
     public Task<IReadOnlyList<ChatMessage>> LoadHistoryAsync(CancellationToken ct = default)
     {

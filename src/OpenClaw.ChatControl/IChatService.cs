@@ -37,6 +37,18 @@ public interface IChatService
 
     /// <summary>Fired when a status event occurs (info, warning, error notifications).</summary>
     event EventHandler<ChatStatusEvent>? StatusReceived;
+
+    /// <summary>Whether the service is currently connected to the backend.</summary>
+    bool IsConnected { get; }
+
+    /// <summary>Fired when the connection state changes. Payload is true when connected.</summary>
+    event EventHandler<bool>? ConnectionStateChanged;
+
+    /// <summary>
+    /// Fired when the service transitions from disconnected to connected.
+    /// Consumers should refresh state (e.g. reload history).
+    /// </summary>
+    event EventHandler? Reconnected;
 }
 
 /// <summary>A streaming text delta for an active agent run.</summary>
