@@ -49,6 +49,16 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
     /// <summary>All messages in the current session.</summary>
     public ObservableCollection<ChatMessage> Messages { get; } = new();
 
+    /// <summary>Available chat sessions.</summary>
+    public ObservableCollection<ChatSessionInfo> Sessions { get; } = new();
+
+    /// <summary>Available AI models.</summary>
+    public ObservableCollection<string> AvailableModels { get; } = new();
+
+    /// <summary>Currently selected model.</summary>
+    [ObservableProperty]
+    public partial string? SelectedModel { get; private set; }
+
     /// <summary>Whether an agent run is currently active.</summary>
     [ObservableProperty]
     public partial bool IsRunActive { get; private set; }
@@ -456,6 +466,17 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
             IsRunActive = false;
             ErrorMessage = "Timed out waiting for a reply";
         }
+    }
+
+    /// <summary>Refresh the list of available sessions from the backend.</summary>
+    public async Task RefreshSessionsAsync()
+    {
+        try
+        {
+            var sessions = await _service.ListSessionsAsync(_sessionCts?.Token ?? default);
+            _dispatchToUI(() => { Sessions.Clear(); foreach (var s in sessions) Sessions.Add(s); });
+        }
+        catch { }
     }
 
     public void Dispose()

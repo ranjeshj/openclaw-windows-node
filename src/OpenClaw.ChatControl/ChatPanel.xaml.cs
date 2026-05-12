@@ -41,6 +41,20 @@ public sealed partial class ChatPanel : UserControl
         DependencyProperty.Register(nameof(ViewModel), typeof(ChatViewModel), typeof(ChatPanel),
             new PropertyMetadata(null, OnViewModelChanged));
 
+    /// <summary>
+    /// Controls visibility of tool call trace cards in assistant messages.
+    /// When false, tool cards are hidden entirely.
+    /// </summary>
+    public bool ShowToolTrace
+    {
+        get => (bool)GetValue(ShowToolTraceProperty);
+        set => SetValue(ShowToolTraceProperty, value);
+    }
+
+    public static readonly DependencyProperty ShowToolTraceProperty =
+        DependencyProperty.Register(nameof(ShowToolTrace), typeof(bool), typeof(ChatPanel),
+            new PropertyMetadata(true));
+
     private static void OnViewModelChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var panel = (ChatPanel)d;

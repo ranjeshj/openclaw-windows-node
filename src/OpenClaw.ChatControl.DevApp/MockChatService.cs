@@ -167,6 +167,24 @@ public sealed class MockChatService : IChatService
         return Task.CompletedTask;
     }
 
+    public Task<IReadOnlyList<ChatSessionInfo>> ListSessionsAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<ChatSessionInfo>>(Array.Empty<ChatSessionInfo>());
+
+    public Task SwitchSessionAsync(string sessionKey, CancellationToken ct = default)
+        => Task.CompletedTask;
+
+    public Task ResetSessionAsync(string? sessionKey, CancellationToken ct = default)
+        => Task.CompletedTask;
+
+    public Task CompactSessionAsync(string? sessionKey, CancellationToken ct = default)
+        => Task.CompletedTask;
+
+    public Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<string>>(new[] { "gpt-5.5", "claude-sonnet-4.5", "gpt-5-mini" });
+
+    public Task SetModelAsync(string model, CancellationToken ct = default)
+        => Task.CompletedTask;
+
     /// <summary>Send a specific response with custom streaming.</summary>
     public async Task SimulateResponseAsync(string response, int delayMs = 50, bool errorMidway = false)
     {

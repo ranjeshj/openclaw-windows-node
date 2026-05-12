@@ -495,7 +495,7 @@ public class OpenClawGatewayClient : WebSocketClientBase, IOperatorGatewayClient
         });
     }
 
-    public Task<bool> PatchSessionAsync(string key, string? thinkingLevel = null, string? verboseLevel = null)
+    public Task<bool> PatchSessionAsync(string key, string? thinkingLevel = null, string? verboseLevel = null, string? model = null)
     {
         if (string.IsNullOrWhiteSpace(key)) return Task.FromResult(false);
 
@@ -507,6 +507,8 @@ public class OpenClawGatewayClient : WebSocketClientBase, IOperatorGatewayClient
             payload["thinkingLevel"] = thinkingLevel;
         if (verboseLevel is not null)
             payload["verboseLevel"] = verboseLevel;
+        if (model is not null)
+            payload["model"] = model;
         return TrySendTrackedRequestAsync("sessions.patch", payload);
     }
 

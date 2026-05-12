@@ -23,6 +23,28 @@ public interface IChatService
     /// <summary>Abort an active agent run.</summary>
     Task AbortAsync(string runId, CancellationToken ct = default);
 
+    // ─── Session Management ───
+
+    /// <summary>List available chat sessions.</summary>
+    Task<IReadOnlyList<ChatSessionInfo>> ListSessionsAsync(CancellationToken ct = default);
+
+    /// <summary>Switch to a different chat session.</summary>
+    Task SwitchSessionAsync(string sessionKey, CancellationToken ct = default);
+
+    /// <summary>Reset a chat session (clear history). Null = current session.</summary>
+    Task ResetSessionAsync(string? sessionKey = null, CancellationToken ct = default);
+
+    /// <summary>Compact a chat session (summarize older messages). Null = current session.</summary>
+    Task CompactSessionAsync(string? sessionKey = null, CancellationToken ct = default);
+
+    // ─── Model Selection ───
+
+    /// <summary>List available AI models.</summary>
+    Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken ct = default);
+
+    /// <summary>Set the active model for the current session.</summary>
+    Task SetModelAsync(string model, CancellationToken ct = default);
+
     /// <summary>Fired when a streaming text delta arrives for an active run.</summary>
     event EventHandler<ChatStreamDelta>? DeltaReceived;
 

@@ -19,6 +19,12 @@ public sealed partial class AssistantMessageControl : UserControl
     private ChatMessage? _message;
     private bool _markdownRendered;
 
+    /// <summary>
+    /// When false, tool call cards are hidden entirely regardless of message content.
+    /// Default is true.
+    /// </summary>
+    public bool ShowToolTrace { get; set; } = true;
+
     public AssistantMessageControl()
     {
         InitializeComponent();
@@ -78,7 +84,7 @@ public sealed partial class AssistantMessageControl : UserControl
     {
         if (_message == null) return;
 
-        if (_message.ToolCalls.Count > 0)
+        if (ShowToolTrace && _message.ToolCalls.Count > 0)
         {
             ToolCallsList.ItemsSource = _message.ToolCalls;
             ToolCallsList.Visibility = Visibility.Visible;

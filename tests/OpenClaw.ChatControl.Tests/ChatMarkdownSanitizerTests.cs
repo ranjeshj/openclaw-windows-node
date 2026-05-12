@@ -89,4 +89,53 @@ public class ChatMarkdownSanitizerTests
         Assert.Equal("https://google.com",
             ChatMarkdownSanitizer.FlattenLinkToInertText(null, "https://google.com"));
     }
+
+    [Fact]
+    public void ReplaceEmbedDirectives_WithTitle_ShowsPlaceholder()
+    {
+        var input = "Here is content [embed ref=\"img123\" title=\"My Chart\" height=\"300\" /] and more";
+        var result = ChatMarkdownSanitizer.ReplaceEmbedDirectives(input);
+        Assert.Contains("\U0001F4CE My Chart", result);
+        Assert.DoesNotContain("[embed", result);
+    }
+
+    [Fact]
+    public void ReplaceEmbedDirectives_WithoutTitle_ShowsDefaultPlaceholder()
+    {
+        var input = "[embed ref=\"img456\" /]";
+        var result = ChatMarkdownSanitizer.ReplaceEmbedDirectives(input);
+        Assert.Equal("\U0001F4CE Embedded content", result);
+    }
+
+    [Fact]
+    public void ReplaceEmbedDirectives_NoDirective_Unchanged()
+    {
+        var input = "Just plain text";
+        var result = ChatMarkdownSanitizer.ReplaceEmbedDirectives(input);
+        Assert.Equal("Just plain text", result);
+    }
+
+    [Fact]
+    public void ReplaceEmbedDirectives_NullOrEmpty_ReturnsInput()
+    {
+        Assert.Null(ChatMarkdownSanitizer.ReplaceEmbedDirectives(null!));
+        Assert.Equal("", ChatMarkdownSanitizer.ReplaceEmbedDirectives(""));
+    }
+
+    [Fact]
+    public void ReplaceEmbedDirectives_CaseInsensitive()
+    {
+        var input = "[EMBED ref=\"x\" title=\"Upper\" /]";
+        var result = ChatMarkdownSanitizer.ReplaceEmbedDirectives(input);
+        Assert.Contains("\U0001F4CE Upper", result);
+    }
+
+    [Fact]
+    public void Sanitize_EmbedDirective_ReplacedWithPlaceholder()
+    {
+        var input = "See this [embed ref=\"chart1\" title=\"Revenue\" /] below";
+        var result = ChatMarkdownSanitizer.Sanitize(input);
+        Assert.Contains("\U0001F4CE Revenue", result);
+        Assert.DoesNotContain("[embed", result);
+    }
 }

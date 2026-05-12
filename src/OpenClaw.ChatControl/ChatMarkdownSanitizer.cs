@@ -138,7 +138,27 @@ public static partial class ChatMarkdownSanitizer
             i++;
         }
 
-        return sb.ToString();
+        return ReplaceEmbedDirectives(sb.ToString());
+    }
+
+    /// <summary>
+    /// Replace [embed ref="..." title="..." /] directives with a visible placeholder.
+    /// </summary>
+    public static string ReplaceEmbedDirectives(string content)
+    {
+        if (string.IsNullOrEmpty(content)) return content;
+        return EmbedDirectiveRegex().Replace(content, match =>
+        {
+            var title = ExtractAttribute(match.Value, "title") ?? "Embedded content";
+            return $"\U0001F4CE {title}";
+        });
+    }
+
+    private static string? ExtractAttribute(string tag, string name)
+    {
+        var pattern = $"{name}=\"([^\"]*)\"";
+        var m = System.Text.RegularExpressions.Regex.Match(tag, pattern);
+        return m.Success ? m.Groups[1].Value : null;
     }
 
     /// <summary>
@@ -170,4 +190,7 @@ public static partial class ChatMarkdownSanitizer
 
     [GeneratedRegex(@"<[^>]+>")]
     private static partial Regex HtmlTagRegex();
+
+    [GeneratedRegex(@"\[embed\s+[^\]]*\/?]", RegexOptions.IgnoreCase)]
+    private static partial Regex EmbedDirectiveRegex();
 }

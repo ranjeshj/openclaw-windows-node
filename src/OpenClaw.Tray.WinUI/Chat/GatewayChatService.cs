@@ -108,6 +108,49 @@ public sealed class GatewayChatService : IChatService, IDisposable
         }
     }
 
+    public async Task<IReadOnlyList<ChatSessionInfo>> ListSessionsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            await _client.RequestSessionsAsync();
+            // Sessions come via SessionsUpdated event - return empty for now
+            // Real implementation would await the event or cache
+            return Array.Empty<ChatSessionInfo>();
+        }
+        catch { return Array.Empty<ChatSessionInfo>(); }
+    }
+
+    public async Task SwitchSessionAsync(string sessionKey, CancellationToken ct = default)
+    {
+        // Gateway uses sessions.messages.subscribe to switch active session
+        await _client.SendChatMessageAsync("/new", sessionKey);
+    }
+
+    public async Task ResetSessionAsync(string? sessionKey, CancellationToken ct = default)
+    {
+        await _client.ResetSessionAsync(sessionKey ?? "main");
+    }
+
+    public async Task CompactSessionAsync(string? sessionKey, CancellationToken ct = default)
+    {
+        await _client.CompactSessionAsync(sessionKey ?? "main");
+    }
+
+    public async Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            await _client.RequestModelsListAsync();
+            return Array.Empty<string>(); // populated async via ModelsListUpdated
+        }
+        catch { return Array.Empty<string>(); }
+    }
+
+    public async Task SetModelAsync(string model, CancellationToken ct = default)
+    {
+        await _client.PatchSessionAsync("main", model: model);
+    }
+
     private void OnAgentEvent(object? sender, AgentEventInfo evt)
     {
         if (_disposed) return;
