@@ -122,13 +122,13 @@ public static class MarkdownRenderer
         switch (block)
         {
             case ParagraphBlock paragraph:
-                var para = new Paragraph();
+                var para = new Paragraph { Margin = new Thickness(0, 0, 0, 6) };
                 RenderInlines(paragraph.Inline, para.Inlines);
                 target.Blocks.Add(para);
                 break;
 
             case HeadingBlock heading:
-                var headingPara = new Paragraph();
+                var headingPara = new Paragraph { Margin = new Thickness(0, 4, 0, 6) };
                 headingPara.FontSize = heading.Level switch
                 {
                     1 => 24,
@@ -396,7 +396,7 @@ public static class MarkdownRenderer
                 {
                     if (child is ParagraphBlock para)
                     {
-                        var listPara = new Paragraph();
+                        var listPara = new Paragraph { Margin = new Thickness(0, 0, 0, 2) };
                         listPara.Inlines.Add(new Run { Text = indent + bullet });
                         RenderInlines(para.Inline, listPara.Inlines);
                         target.Blocks.Add(listPara);

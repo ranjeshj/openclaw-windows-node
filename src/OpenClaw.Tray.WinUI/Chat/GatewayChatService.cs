@@ -18,7 +18,6 @@ namespace OpenClawTray.Chat;
 public sealed class GatewayChatService : IChatService, IDisposable
 {
     private readonly IOperatorGatewayClient _client;
-    private int _lastAgentSeq;
     private bool _disposed;
 
     public GatewayChatService(IOperatorGatewayClient client)
@@ -179,20 +178,10 @@ public sealed class GatewayChatService : IChatService, IDisposable
 
         // Only process events for the main session (ignore cross-session events)
         if (!string.IsNullOrEmpty(evt.SessionKey) &&
-            !evt.SessionKey.Contains("main", StringComparison.OrdinalIgnoreCase))
+            evt.SessionKey != "main" &&
+            !evt.SessionKey.Contains(":main:", StringComparison.OrdinalIgnoreCase) &&
+            !evt.SessionKey.EndsWith(":main", StringComparison.OrdinalIgnoreCase))
             return;
-
-        // Detect sequence gaps and force history reload
-        if (evt.Seq > 0)
-        {
-            if (_lastAgentSeq > 0 && evt.Seq != _lastAgentSeq + 1)
-            {
-                _lastAgentSeq = evt.Seq;
-                Reconnected?.Invoke(this, EventArgs.Empty);
-                return;
-            }
-            _lastAgentSeq = evt.Seq;
-        }
 
         try
         {
