@@ -215,16 +215,35 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         });
     }
 
+    /// <summary>
+    /// Check if an incoming event's RunId matches the active streaming message.
+    /// Accepts the event if: RunId matches directly, or ActiveRunId matches,
+    /// or the message is still in Thinking state (not yet associated with a RunId).
+    /// </summary>
+    private bool IsActiveRunEvent(string eventRunId)
+    {
+        if (_activeStreamingMessage == null) return false;
+        if (_activeStreamingMessage.RunId == eventRunId) return true;
+        if (ActiveRunId == eventRunId) return true;
+        // Accept if message is waiting for RunId association (Thinking state)
+        if (_activeStreamingMessage.Status == MessageStatus.Thinking && _activeStreamingMessage.RunId == null)
+        {
+            _activeStreamingMessage.RunId = eventRunId;
+            return true;
+        }
+        return false;
+    }
+
     private void OnDeltaReceived(object? sender, ChatStreamDelta e)
     {
         _dispatchToUI(() =>
         {
             lock (_streamLock)
             {
-                if (_activeStreamingMessage == null || _activeStreamingMessage.RunId != e.RunId)
+                if (!IsActiveRunEvent(e.RunId))
                     return;
 
-                if (_activeStreamingMessage.Status == MessageStatus.Thinking)
+                if (_activeStreamingMessage!.Status == MessageStatus.Thinking)
                 {
                     _activeStreamingMessage.BeginStreaming(e.RunId);
                 }
@@ -259,16 +278,14 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
                         break;
 
                     case ChatLifecyclePhase.End:
-                        if (_activeStreamingMessage != null &&
-                            (_activeStreamingMessage.RunId == e.RunId || ActiveRunId == e.RunId))
+                        if (IsActiveRunEvent(e.RunId))
                         {
-                            // Capture token usage from lifecycle end
-                            if (e.InputTokens.HasValue) _activeStreamingMessage.InputTokens = e.InputTokens;
-                            if (e.OutputTokens.HasValue) _activeStreamingMessage.OutputTokens = e.OutputTokens;
-                            if (e.ContextPercent.HasValue) _activeStreamingMessage.ContextPercent = e.ContextPercent;
-                            if (!string.IsNullOrEmpty(e.Model)) _activeStreamingMessage.ModelName = e.Model;
+                            if (e.InputTokens.HasValue) _activeStreamingMessage!.InputTokens = e.InputTokens;
+                            if (e.OutputTokens.HasValue) _activeStreamingMessage!.OutputTokens = e.OutputTokens;
+                            if (e.ContextPercent.HasValue) _activeStreamingMessage!.ContextPercent = e.ContextPercent;
+                            if (!string.IsNullOrEmpty(e.Model)) _activeStreamingMessage!.ModelName = e.Model;
 
-                            _activeStreamingMessage.FinalizeContent();
+                            _activeStreamingMessage!.FinalizeContent();
                             _activeStreamingMessage = null;
                             ActiveRunId = null;
                             IsRunActive = false;
@@ -276,10 +293,9 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
                         break;
 
                     case ChatLifecyclePhase.Error:
-                        if (_activeStreamingMessage != null &&
-                            (_activeStreamingMessage.RunId == e.RunId || ActiveRunId == e.RunId))
+                        if (IsActiveRunEvent(e.RunId))
                         {
-                            _activeStreamingMessage.MarkError(e.ErrorMessage);
+                            _activeStreamingMessage!.MarkError(e.ErrorMessage);
                             _activeStreamingMessage = null;
                             ActiveRunId = null;
                             IsRunActive = false;
@@ -296,8 +312,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         {
             lock (_streamLock)
             {
-                if (_activeStreamingMessage == null ||
-                    (_activeStreamingMessage.RunId != e.RunId && ActiveRunId != e.RunId))
+                if (!IsActiveRunEvent(e.RunId))
                     return;
 
                 if (e.Phase == ToolCallPhase.Running)
@@ -329,11 +344,10 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         {
             lock (_streamLock)
             {
-                if (_activeStreamingMessage == null ||
-                    (_activeStreamingMessage.RunId != e.RunId && ActiveRunId != e.RunId))
+                if (!IsActiveRunEvent(e.RunId))
                     return;
 
-                _activeStreamingMessage.AppendReasoning(e.Delta);
+                _activeStreamingMessage!.AppendReasoning(e.Delta);
             }
         });
     }
