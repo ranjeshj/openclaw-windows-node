@@ -2,46 +2,65 @@ using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using OpenClawTray.Windows;
+using OpenClaw.Shared;
+using OpenClawTray.Services;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Text.Json;
 
 namespace OpenClawTray.Pages;
 
 public sealed partial class CronPage : Page
 {
-    private HubWindow? _hub;
+    private IOperatorGatewayClient? _client;
+    private AppState? _state;
 
     public CronPage()
     {
         InitializeComponent();
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state, IOperatorGatewayClient? client)
     {
-        _hub = hub;
-        if (hub.GatewayClient != null)
+        _client = client;
+        _state = state;
+        if (_state != null)
+            _state.PropertyChanged += OnStateChanged;
+        if (client != null)
         {
-            _ = hub.GatewayClient.RequestCronListAsync();
-            _ = hub.GatewayClient.RequestCronStatusAsync();
+            _ = client.RequestCronListAsync();
+            _ = client.RequestCronStatusAsync();
+        }
+    }
+
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(AppState.CronList):
+                if (_state!.CronList.HasValue) UpdateFromGateway(_state.CronList.Value);
+                break;
+            case nameof(AppState.CronStatus):
+                if (_state!.CronStatus.HasValue) UpdateFromGateway(_state.CronStatus.Value);
+                break;
         }
     }
 
     private void OnRunNowClick(object sender, RoutedEventArgs e)
     {
         var jobId = (sender as Button)?.Tag as string;
-        if (string.IsNullOrEmpty(jobId) || _hub?.GatewayClient == null) return;
-        _ = _hub.GatewayClient.RunCronJobAsync(jobId);
+        if (string.IsNullOrEmpty(jobId) || _client == null) return;
+        _ = _client.RunCronJobAsync(jobId);
     }
 
     private void OnRemoveClick(object sender, RoutedEventArgs e)
     {
         var jobId = (sender as Button)?.Tag as string;
-        if (string.IsNullOrEmpty(jobId) || _hub?.GatewayClient == null) return;
-        _ = _hub.GatewayClient.RemoveCronJobAsync(jobId).ContinueWith(_ =>
+        if (string.IsNullOrEmpty(jobId) || _client == null) return;
+        _ = _client.RemoveCronJobAsync(jobId).ContinueWith(_ =>
         {
-            DispatcherQueue?.TryEnqueue(() => _hub.GatewayClient.RequestCronListAsync());
+            DispatcherQueue?.TryEnqueue(() => _client.RequestCronListAsync());
         });
     }
 

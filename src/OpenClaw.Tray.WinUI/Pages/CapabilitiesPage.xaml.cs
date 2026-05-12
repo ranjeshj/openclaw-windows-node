@@ -4,7 +4,6 @@ using Microsoft.UI.Xaml.Input;
 using OpenClaw.Shared;
 using OpenClaw.Shared.Capabilities;
 using OpenClawTray.Services;
-using OpenClawTray.Windows;
 using System;
 using System.Collections.Generic;
 using Windows.ApplicationModel.DataTransfer;
@@ -14,7 +13,10 @@ namespace OpenClawTray.Pages;
 
 public sealed partial class CapabilitiesPage : Page
 {
-    private HubWindow? _hub;
+    private AppState? _state;
+    private SettingsManager? _settings;
+    private VoiceService? _voiceService;
+    private Action<string>? _dispatch;
     private bool _suppressMcpToggle;
     private bool _suppressTtsProviderChange;
 
@@ -28,22 +30,25 @@ public sealed partial class CapabilitiesPage : Page
         InitializeComponent();
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state, SettingsManager? settings, VoiceService? voiceService, Action<string>? dispatch)
     {
-        _hub = hub;
+        _state = state;
+        _settings = settings;
+        _voiceService = voiceService;
+        _dispatch = dispatch;
         HostnameText.Text = Environment.MachineName;
 
-        BuildCapabilityToggles(hub);
-        UpdateMcpStatus(hub);
-        UpdateSttCard(hub);
-        UpdateTtsCard(hub);
-        UpdateNodeStatus(hub);
+        BuildCapabilityToggles();
+        UpdateMcpStatus();
+        UpdateSttCard();
+        UpdateTtsCard();
+        UpdateNodeStatus();
     }
 
-    private void BuildCapabilityToggles(HubWindow hub)
+    private void BuildCapabilityToggles()
     {
-        if (hub.Settings == null) return;
-        var settings = hub.Settings;
+        if (_settings == null) return;
+        var settings = _settings;
 
         var capabilities = new (string Icon, string Label, bool Value, Action<bool> Setter)[]
         {
@@ -70,10 +75,10 @@ public sealed partial class CapabilitiesPage : Page
             {
                 setter(toggle.IsOn);
                 settings.Save();
-                hub.RaiseSettingsSaved();
-                UpdateSttCard(hub);
-                UpdateTtsCard(hub);
-                UpdateNodeStatus(hub);
+                _dispatch?.Invoke("settings-saved");
+                UpdateSttCard();
+                UpdateTtsCard();
+                UpdateNodeStatus();
             };
             items.Add(toggle);
         }
@@ -85,30 +90,30 @@ public sealed partial class CapabilitiesPage : Page
     // Speech-to-Text settings card
     // ============================================================
 
-    private void UpdateSttCard(HubWindow hub)
+    private void UpdateSttCard()
     {
-        var enabled = hub.Settings?.NodeSttEnabled == true;
+        var enabled = _settings?.NodeSttEnabled == true;
         SttCard.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
-        if (!enabled || hub.Settings == null) return;
+        if (!enabled || _settings == null) return;
 
-        UpdateSttEngineHint(hub);
+        UpdateSttEngineHint();
     }
 
-    private void UpdateSttEngineHint(HubWindow hub)
+    private void UpdateSttEngineHint()
     {
         // Whisper is the only engine. Surface model-readiness so the user
         // knows what (if anything) needs to happen before stt.* will work.
         //
         // Check the file directly via WhisperModelManager rather than going
-        // through hub.VoiceServiceInstance — that instance is only created
+        // through VoiceService — that instance is only created
         // by NodeService.RegisterCapabilities() at Connect time, so a user
         // who toggled STT on but hasn't reconnected yet would see a stale
         // "not downloaded" message even with the file on disk.
-        var modelName = hub.Settings?.SttModelName ?? "base";
+        var modelName = _settings?.SttModelName ?? "base";
         var modelManager = new OpenClaw.Shared.Audio.WhisperModelManager(
             SettingsManager.SettingsDirectoryPath, new AppLogger());
         var modelDownloaded = modelManager.IsModelDownloaded(modelName);
-        var modelDownloading = hub.VoiceServiceInstance?.IsWhisperDownloadingModel ?? false;
+        var modelDownloading = _voiceService?.IsWhisperDownloadingModel ?? false;
 
         if (modelDownloaded)
         {
@@ -126,21 +131,20 @@ public sealed partial class CapabilitiesPage : Page
 
     private void OnSttMoreSettingsClick(object sender, RoutedEventArgs e)
     {
-        // Navigate the Hub to the dedicated voice settings page.
-        _hub?.NavigateTo("voice");
+        _dispatch?.Invoke("voice");
     }
 
     // ============================================================
     // Text-to-Speech settings card
     // ============================================================
 
-    private void UpdateTtsCard(HubWindow hub)
+    private void UpdateTtsCard()
     {
-        var enabled = hub.Settings?.NodeTtsEnabled == true;
+        var enabled = _settings?.NodeTtsEnabled == true;
         TtsCard.Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
-        if (!enabled || hub.Settings == null) return;
+        if (!enabled || _settings == null) return;
 
-        var settings = hub.Settings;
+        var settings = _settings;
 
         _suppressTtsProviderChange = true;
         // ComboBox order: 0=Piper, 1=Windows, 2=ElevenLabs.
@@ -174,17 +178,17 @@ public sealed partial class CapabilitiesPage : Page
     private void OnTtsProviderSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_suppressTtsProviderChange) return;
-        if (_hub?.Settings == null) return;
+        if (_settings == null) return;
 
         var newProvider = (TtsProviderComboBox.SelectedItem is ComboBoxItem item && item.Tag is string tag)
             ? tag
             : TtsCapability.WindowsProvider;
 
-        if (!string.Equals(_hub.Settings.TtsProvider, newProvider, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(_settings.TtsProvider, newProvider, StringComparison.OrdinalIgnoreCase))
         {
-            _hub.Settings.TtsProvider = newProvider;
-            _hub.Settings.Save();
-            _hub.RaiseSettingsSaved();
+            _settings.TtsProvider = newProvider;
+            _settings.Save();
+            _dispatch?.Invoke("settings-saved");
             TtsStatusText.Text = $"Default provider: {newProvider}";
         }
 
@@ -193,8 +197,8 @@ public sealed partial class CapabilitiesPage : Page
 
     private void OnTtsElevenLabsCommitted(object sender, RoutedEventArgs e)
     {
-        if (_hub?.Settings == null) return;
-        var settings = _hub.Settings;
+        if (_settings == null) return;
+        var settings = _settings;
 
         var changed = false;
 
@@ -228,7 +232,7 @@ public sealed partial class CapabilitiesPage : Page
         if (changed)
         {
             settings.Save();
-            _hub.RaiseSettingsSaved();
+            _dispatch?.Invoke("settings-saved");
             // Re-render the API key field so the sentinel tracks the newly
             // saved state instead of leaving the typed key visible.
             TtsElevenLabsApiKeyBox.Password =
@@ -237,10 +241,10 @@ public sealed partial class CapabilitiesPage : Page
         }
     }
 
-    private void UpdateNodeStatus(HubWindow hub)
+    private void UpdateNodeStatus()
     {
-        var nodeEnabled = hub.Settings?.EnableNodeMode ?? false;
-        var isConnected = hub.CurrentStatus == ConnectionStatus.Connected;
+        var nodeEnabled = _settings?.EnableNodeMode ?? false;
+        var isConnected = (_state?.Status ?? ConnectionStatus.Disconnected) == ConnectionStatus.Connected;
 
         if (!nodeEnabled)
         {
@@ -254,13 +258,13 @@ public sealed partial class CapabilitiesPage : Page
             NodeStatusText.Text = "Node active";
 
             var caps = new List<string>();
-            if (hub.Settings?.NodeBrowserProxyEnabled == true) caps.Add("browser");
-            if (hub.Settings?.NodeCameraEnabled == true) caps.Add("camera");
-            if (hub.Settings?.NodeCanvasEnabled == true) caps.Add("canvas");
-            if (hub.Settings?.NodeScreenEnabled == true) caps.Add("screen");
-            if (hub.Settings?.NodeLocationEnabled == true) caps.Add("location");
-            if (hub.Settings?.NodeTtsEnabled == true) caps.Add("tts");
-            if (hub.Settings?.NodeSttEnabled == true) caps.Add("stt");
+            if (_settings?.NodeBrowserProxyEnabled == true) caps.Add("browser");
+            if (_settings?.NodeCameraEnabled == true) caps.Add("camera");
+            if (_settings?.NodeCanvasEnabled == true) caps.Add("canvas");
+            if (_settings?.NodeScreenEnabled == true) caps.Add("screen");
+            if (_settings?.NodeLocationEnabled == true) caps.Add("location");
+            if (_settings?.NodeTtsEnabled == true) caps.Add("tts");
+            if (_settings?.NodeSttEnabled == true) caps.Add("stt");
             NodeDetailsText.Text = caps.Count > 0
                 ? $"Providing {caps.Count} capabilities: {string.Join(", ", caps)}"
                 : "No capabilities enabled.";
@@ -273,9 +277,9 @@ public sealed partial class CapabilitiesPage : Page
         }
     }
 
-    private void UpdateMcpStatus(HubWindow hub)
+    private void UpdateMcpStatus()
     {
-        var settings = hub.Settings;
+        var settings = _settings;
         if (settings == null) return;
 
         _suppressMcpToggle = true;
@@ -295,11 +299,11 @@ public sealed partial class CapabilitiesPage : Page
     private void OnMcpToggled(object sender, RoutedEventArgs e)
     {
         if (_suppressMcpToggle) return;
-        if (_hub?.Settings == null) return;
-        _hub.Settings.EnableMcpServer = McpToggle.IsOn;
-        _hub.Settings.Save();
-        _hub.RaiseSettingsSaved();
-        UpdateMcpStatus(_hub);
+        if (_settings == null) return;
+        _settings.EnableMcpServer = McpToggle.IsOn;
+        _settings.Save();
+        _dispatch?.Invoke("settings-saved");
+        UpdateMcpStatus();
     }
 
     private void OnCopyMcpToken(object sender, RoutedEventArgs e)

@@ -2,37 +2,50 @@ using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using OpenClawTray.Windows;
+using OpenClaw.Shared;
+using OpenClawTray.Services;
+using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Text.Json;
 
 namespace OpenClawTray.Pages;
 
 public sealed partial class SkillsPage : Page
 {
-    private HubWindow? _hub;
+    private IOperatorGatewayClient? _client;
+    private AppState? _state;
 
     public SkillsPage()
     {
         InitializeComponent();
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state, IOperatorGatewayClient? client, Func<List<string>> getAgentIds)
     {
-        _hub = hub;
-        PopulateAgentFilter(hub);
-        if (hub.GatewayClient != null)
+        _client = client;
+        _state = state;
+        if (_state != null)
+            _state.PropertyChanged += OnStateChanged;
+        PopulateAgentFilter(getAgentIds);
+        if (client != null)
         {
-            _ = hub.GatewayClient.RequestSkillsStatusAsync(GetSelectedAgentId());
+            _ = client.RequestSkillsStatusAsync(GetSelectedAgentId());
         }
     }
 
-    private void PopulateAgentFilter(HubWindow hub)
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AppState.SkillsStatus) && _state!.SkillsStatus.HasValue)
+            UpdateFromGateway(_state.SkillsStatus.Value);
+    }
+
+    private void PopulateAgentFilter(Func<List<string>> getAgentIds)
     {
         AgentFilterCombo.SelectionChanged -= OnAgentFilterChanged;
         AgentFilterCombo.Items.Clear();
         AgentFilterCombo.Items.Add(new ComboBoxItem { Content = "All Agents", Tag = "" });
-        foreach (var id in hub.GetAgentIds())
+        foreach (var id in getAgentIds())
             AgentFilterCombo.Items.Add(new ComboBoxItem { Content = id, Tag = id });
         AgentFilterCombo.SelectedIndex = 0;
         AgentFilterCombo.SelectionChanged += OnAgentFilterChanged;
@@ -50,25 +63,24 @@ public sealed partial class SkillsPage : Page
 
     private void OnAgentFilterChanged(object sender, SelectionChangedEventArgs e)
     {
-        var client = _hub?.GatewayClient;
-        if (client != null)
-            _ = client.RequestSkillsStatusAsync(GetSelectedAgentId());
+        if (_client != null)
+            _ = _client.RequestSkillsStatusAsync(GetSelectedAgentId());
     }
 
     private void OnSkillActionClick(object sender, RoutedEventArgs e)
     {
         var skillId = (sender as Button)?.Tag as string;
-        if (string.IsNullOrEmpty(skillId) || _hub?.GatewayClient == null) return;
+        if (string.IsNullOrEmpty(skillId) || _client == null) return;
 
         // Determine action based on button content
         var label = (sender as Button)?.Content as string;
         if (label == "Update")
         {
-            _ = _hub.GatewayClient.UpdateSkillAsync(skillId);
+            _ = _client.UpdateSkillAsync(skillId);
         }
         else
         {
-            _ = _hub.GatewayClient.InstallSkillAsync(skillId);
+            _ = _client.InstallSkillAsync(skillId);
         }
     }
 

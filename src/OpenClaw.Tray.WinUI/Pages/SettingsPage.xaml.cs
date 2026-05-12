@@ -4,7 +4,6 @@ using Microsoft.UI.Xaml.Controls;
 using OpenClaw.Shared;
 using OpenClawTray.Helpers;
 using OpenClawTray.Services;
-using OpenClawTray.Windows;
 using System;
 using System.Threading.Tasks;
 
@@ -12,7 +11,8 @@ namespace OpenClawTray.Pages;
 
 public sealed partial class SettingsPage : Page
 {
-    private HubWindow? _hub;
+    private SettingsManager? _settings;
+    private Action<string>? _dispatch;
     private bool _initialized;
     private bool _saving;
     private bool _isDirty;
@@ -23,20 +23,21 @@ public sealed partial class SettingsPage : Page
         InitializeComponent();
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(SettingsManager? settings, Action<string>? dispatch)
     {
-        _hub = hub;
-        if (!_initialized && hub.Settings != null)
+        _settings = settings;
+        _dispatch = dispatch;
+        if (!_initialized && settings != null)
         {
-            LoadSettings(hub.Settings);
-            hub.Settings.Saved += OnExternalSettingsChanged;
+            LoadSettings(settings);
+            settings.Saved += OnExternalSettingsChanged;
             RegisterDirtyHandlers();
             _initialized = true;
         }
-        else if (_initialized && hub.Settings != null)
+        else if (_initialized && settings != null)
         {
-            ScreenRecordingToggle.IsOn = hub.Settings.ScreenRecordingConsentGiven;
-            CameraRecordingToggle.IsOn = hub.Settings.CameraRecordingConsentGiven;
+            ScreenRecordingToggle.IsOn = settings.ScreenRecordingConsentGiven;
+            CameraRecordingToggle.IsOn = settings.CameraRecordingConsentGiven;
         }
     }
 
@@ -62,11 +63,11 @@ public sealed partial class SettingsPage : Page
 
     private void OnExternalSettingsChanged(object? sender, EventArgs e)
     {
-        if (_hub?.Settings == null || _saving || _isDirty) return;
+        if (_settings == null || _saving || _isDirty) return;
         DispatcherQueue.TryEnqueue(() =>
         {
-            ScreenRecordingToggle.IsOn = _hub.Settings.ScreenRecordingConsentGiven;
-            CameraRecordingToggle.IsOn = _hub.Settings.CameraRecordingConsentGiven;
+            ScreenRecordingToggle.IsOn = _settings.ScreenRecordingConsentGiven;
+            CameraRecordingToggle.IsOn = _settings.CameraRecordingConsentGiven;
 
             // Show that the change is already persisted
             SaveButton.Content = "✓ Saved";
@@ -110,9 +111,9 @@ public sealed partial class SettingsPage : Page
 
     private void OnSave(object sender, RoutedEventArgs e)
     {
-        if (_hub?.Settings == null) return;
+        if (_settings == null) return;
 
-        var s = _hub.Settings;
+        var s = _settings;
         s.AutoStart = AutoStartToggle.IsOn;
         s.GlobalHotkeyEnabled = GlobalHotkeyToggle.IsOn;
         s.ShowNotifications = NotificationsToggle.IsOn;
@@ -137,7 +138,7 @@ public sealed partial class SettingsPage : Page
         _saving = false;
         _isDirty = false;
         AutoStartManager.SetAutoStart(s.AutoStart);
-        _hub.RaiseSettingsSaved();
+        _dispatch?.Invoke("settings-saved");
 
         SaveButton.Content = "✓ Saved";
         var timer = DispatcherQueue.CreateTimer();
@@ -148,10 +149,10 @@ public sealed partial class SettingsPage : Page
 
     private void OnCancel(object sender, RoutedEventArgs e)
     {
-        if (_hub?.Settings != null)
+        if (_settings != null)
         {
             _initialized = false;
-            LoadSettings(_hub.Settings);
+            LoadSettings(_settings);
             _initialized = true;
             _isDirty = false;
         }

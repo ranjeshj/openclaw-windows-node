@@ -4,9 +4,10 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 using OpenClaw.Shared;
-using OpenClawTray.Windows;
+using OpenClawTray.Services;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using WinDataTransfer = global::Windows.ApplicationModel.DataTransfer;
 using WinColor = global::Windows.UI.Color;
 
@@ -14,25 +15,51 @@ namespace OpenClawTray.Pages;
 
 public sealed partial class NodesPage : Page
 {
-    private HubWindow? _hub;
+    private IOperatorGatewayClient? _client;
+    private AppState? _state;
 
     public NodesPage()
     {
         InitializeComponent();
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state, IOperatorGatewayClient? client)
     {
-        _hub = hub;
-        ConnectionWarning.Visibility = hub.GatewayClient != null ? Visibility.Collapsed : Visibility.Visible;
-        if (hub.GatewayClient != null)
+        _client = client;
+        _state = state;
+        if (_state != null)
+            _state.PropertyChanged += OnStateChanged;
+        ConnectionWarning.Visibility = client != null ? Visibility.Collapsed : Visibility.Visible;
+        if (client != null)
         {
             // Apply cached data immediately, then request fresh
-            if (hub.LastNodes != null)
-                UpdateNodes(hub.LastNodes);
+            if (state?.Nodes != null)
+                UpdateNodes(state.Nodes);
             else
                 NodesList.Children.Clear();
-            _ = hub.GatewayClient.RequestNodesAsync();
+            _ = client.RequestNodesAsync();
+            if (_state?.NodePairList != null) UpdatePairingRequests(_state.NodePairList);
+            if (_state?.DevicePairList != null) UpdateDevicePairingRequests(_state.DevicePairList);
+            if (_state?.Presence != null) UpdatePresence(_state.Presence);
+        }
+    }
+
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(AppState.Nodes):
+                UpdateNodes(_state!.Nodes);
+                break;
+            case nameof(AppState.NodePairList):
+                if (_state!.NodePairList != null) UpdatePairingRequests(_state.NodePairList);
+                break;
+            case nameof(AppState.DevicePairList):
+                if (_state!.DevicePairList != null) UpdateDevicePairingRequests(_state.DevicePairList);
+                break;
+            case nameof(AppState.Presence):
+                if (_state!.Presence != null) UpdatePresence(_state.Presence);
+                break;
         }
     }
 
@@ -284,8 +311,8 @@ public sealed partial class NodesPage : Page
             var approveBtn = new Button { Content = "Approve", Style = (Style)Application.Current.Resources["AccentButtonStyle"] };
             var rejectBtn = new Button { Content = "Reject" };
             var capturedId = req.RequestId;
-            approveBtn.Click += async (s, e) => { if (_hub?.GatewayClient != null) await _hub.GatewayClient.NodePairApproveAsync(capturedId); };
-            rejectBtn.Click += async (s, e) => { if (_hub?.GatewayClient != null) await _hub.GatewayClient.NodePairRejectAsync(capturedId); };
+            approveBtn.Click += async (s, e) => { if (_client != null) await _client.NodePairApproveAsync(capturedId); };
+            rejectBtn.Click += async (s, e) => { if (_client != null) await _client.NodePairRejectAsync(capturedId); };
             buttons.Children.Add(approveBtn);
             buttons.Children.Add(rejectBtn);
             Grid.SetColumn(buttons, 1);
@@ -350,8 +377,8 @@ public sealed partial class NodesPage : Page
             var approveBtn = new Button { Content = "Approve", Style = (Style)Application.Current.Resources["AccentButtonStyle"] };
             var rejectBtn = new Button { Content = "Reject" };
             var capturedId = req.RequestId;
-            approveBtn.Click += async (s, e) => { if (_hub?.GatewayClient != null) await _hub.GatewayClient.DevicePairApproveAsync(capturedId); };
-            rejectBtn.Click += async (s, e) => { if (_hub?.GatewayClient != null) await _hub.GatewayClient.DevicePairRejectAsync(capturedId); };
+            approveBtn.Click += async (s, e) => { if (_client != null) await _client.DevicePairApproveAsync(capturedId); };
+            rejectBtn.Click += async (s, e) => { if (_client != null) await _client.DevicePairRejectAsync(capturedId); };
             buttons.Children.Add(approveBtn);
             buttons.Children.Add(rejectBtn);
             Grid.SetColumn(buttons, 1);

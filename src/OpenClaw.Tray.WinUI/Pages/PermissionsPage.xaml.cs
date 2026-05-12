@@ -1,7 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using OpenClawTray.Windows;
+using OpenClawTray.Services;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -13,17 +13,15 @@ namespace OpenClawTray.Pages;
 
 public sealed partial class PermissionsPage : Page
 {
-    private HubWindow? _hub;
     private List<ExecPolicyRule> _policyRules = new();
 
     public PermissionsPage() { InitializeComponent(); }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state)
     {
-        _hub = hub;
         LoadExecPolicy();
         LoadPermissions();
-        LoadAllowlist(hub.LastConfig);
+        LoadAllowlist(state?.Config);
     }
 
     // ── Exec Policy ──────────────────────────────────────────────────

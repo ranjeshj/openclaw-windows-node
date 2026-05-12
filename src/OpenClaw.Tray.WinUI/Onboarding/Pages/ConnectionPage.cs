@@ -100,7 +100,7 @@ public sealed class ConnectionPage : Component<OnboardingState>
         var (statusMsg, setStatusMsg) = UseState(Props.Mode == ConnectionMode.Local ? detectedMsg : LocalizationHelper.GetString("Onboarding_Connection_Ready"));
         var (testing, setTesting) = UseState(false);
         var (pairingDeviceId, setPairingDeviceId) = UseState(visualPairingDeviceId);
-        var (pairingCommand, setPairingCommand) = UseState(string.IsNullOrEmpty(visualPairingDeviceId) ? "" : App.BuildPairingApprovalCommand(visualPairingDeviceId));
+        var (pairingCommand, setPairingCommand) = UseState(string.IsNullOrEmpty(visualPairingDeviceId) ? "" : NodeCoordinator.BuildPairingApprovalCommand(visualPairingDeviceId));
         var (copied, setCopied) = UseState(!string.IsNullOrEmpty(visualPairingDeviceId));
         var (copyFailed, setCopyFailed) = UseState(false);
 
@@ -347,12 +347,12 @@ public sealed class ConnectionPage : Component<OnboardingState>
 
                     setStatusMsg($"⏳ {LocalizationHelper.GetString("Onboarding_Connection_StatusPairing")}");
                     setPairingDeviceId(deviceId);
-                    var cmd = App.BuildPairingApprovalCommand(deviceId);
+                    var cmd = NodeCoordinator.BuildPairingApprovalCommand(deviceId);
                     setPairingCommand(cmd);
                     var commandCopied = TryCopyPairingCommand(cmd);
                     setCopied(commandCopied);
                     setCopyFailed(!commandCopied);
-                    app.ShowPairingPendingNotification(deviceId, cmd);
+                    app.NodeCoordinator?.ShowPairingPendingNotification(deviceId, cmd);
                 }
                 else if (authFailed)
                 {

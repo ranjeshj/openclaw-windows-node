@@ -1,9 +1,10 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using OpenClaw.Shared;
-using OpenClawTray.Windows;
+using OpenClawTray.Services;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
 
@@ -11,26 +12,44 @@ namespace OpenClawTray.Pages;
 
 public sealed partial class UsagePage : Page
 {
-    private HubWindow? _hub;
+    private AppState? _state;
 
     public UsagePage()
     {
         InitializeComponent();
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state, IOperatorGatewayClient? client)
     {
-        _hub = hub;
-        ConnectionWarning.Visibility = hub.GatewayClient != null ? Visibility.Collapsed : Visibility.Visible;
-        if (hub.GatewayClient != null)
+        _state = state;
+        if (_state != null)
+            _state.PropertyChanged += OnStateChanged;
+        ConnectionWarning.Visibility = client != null ? Visibility.Collapsed : Visibility.Visible;
+        if (client != null)
         {
             // Apply cached data immediately, then request fresh
-            if (hub.LastUsage != null) UpdateUsage(hub.LastUsage);
-            if (hub.LastUsageCost != null) UpdateUsageCost(hub.LastUsageCost);
-            if (hub.LastUsageStatus != null) UpdateUsageStatus(hub.LastUsageStatus);
-            _ = hub.GatewayClient.RequestUsageAsync();
-            _ = hub.GatewayClient.RequestUsageCostAsync(30);
-            _ = hub.GatewayClient.RequestUsageStatusAsync();
+            if (state?.Usage != null) UpdateUsage(state.Usage);
+            if (state?.UsageCost != null) UpdateUsageCost(state.UsageCost);
+            if (state?.UsageStatus != null) UpdateUsageStatus(state.UsageStatus);
+            _ = client.RequestUsageAsync();
+            _ = client.RequestUsageCostAsync(30);
+            _ = client.RequestUsageStatusAsync();
+        }
+    }
+
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(AppState.Usage):
+                if (_state!.Usage != null) UpdateUsage(_state.Usage);
+                break;
+            case nameof(AppState.UsageCost):
+                if (_state!.UsageCost != null) UpdateUsageCost(_state.UsageCost);
+                break;
+            case nameof(AppState.UsageStatus):
+                if (_state!.UsageStatus != null) UpdateUsageStatus(_state.UsageStatus);
+                break;
         }
     }
 

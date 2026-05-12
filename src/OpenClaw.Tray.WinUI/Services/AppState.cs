@@ -19,7 +19,7 @@ namespace OpenClawTray.Services;
 /// <para>Pages and windows read from this model. During the transition
 /// period, HubWindow delegates its <c>Last*</c> properties to this model.</para>
 /// </summary>
-internal sealed class AppModel : INotifyPropertyChanged
+internal sealed class AppState : INotifyPropertyChanged
 {
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -184,7 +184,7 @@ internal sealed class AppModel : INotifyPropertyChanged
     private UpdateCommandCenterInfo _updateInfo= new()
     {
         Status = "Not checked",
-        CurrentVersion = typeof(AppModel).Assembly.GetName().Version?.ToString() ?? "unknown"
+        CurrentVersion = typeof(AppState).Assembly.GetName().Version?.ToString() ?? "unknown"
     };
     public UpdateCommandCenterInfo UpdateInfo
     {
@@ -240,9 +240,9 @@ internal sealed class AppModel : INotifyPropertyChanged
     {
         lock (_agentEvents)
         {
-            _agentEvents.Add(evt);
+            _agentEvents.Insert(0, evt);
             if (_agentEvents.Count > MaxAgentEvents)
-                _agentEvents.RemoveAt(0);
+                _agentEvents.RemoveAt(_agentEvents.Count - 1);
         }
         AgentEventAdded?.Invoke(evt);
     }

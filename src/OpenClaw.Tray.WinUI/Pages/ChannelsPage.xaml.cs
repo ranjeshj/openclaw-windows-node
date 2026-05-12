@@ -4,33 +4,44 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 using OpenClaw.Shared;
-using OpenClawTray.Windows;
+using OpenClawTray.Services;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 
 namespace OpenClawTray.Pages;
 
 public sealed partial class ChannelsPage : Page
 {
-    private HubWindow? _hub;
+    private IOperatorGatewayClient? _client;
+    private AppState? _state;
 
     public ChannelsPage()
     {
         InitializeComponent();
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state, IOperatorGatewayClient? client)
     {
-        _hub = hub;
-        ConnectionWarning.Visibility = hub.GatewayClient != null ? Visibility.Collapsed : Visibility.Visible;
-        if (hub.GatewayClient != null)
+        _client = client;
+        _state = state;
+        if (_state != null)
+            _state.PropertyChanged += OnStateChanged;
+        ConnectionWarning.Visibility = client != null ? Visibility.Collapsed : Visibility.Visible;
+        if (client != null)
         {
             // Apply cached data immediately
-            if (hub.LastChannels != null)
-                UpdateChannels(hub.LastChannels);
+            if (state?.Channels != null)
+                UpdateChannels(state.Channels);
             else
                 ChannelsList.Children.Clear();
         }
+    }
+
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AppState.Channels))
+            UpdateChannels(_state!.Channels);
     }
 
     public void UpdateChannels(ChannelHealth[] channels)
@@ -148,7 +159,7 @@ public sealed partial class ChannelsPage : Page
     {
         if (sender is Button btn && btn.Tag is string name)
         {
-            var client = _hub?.GatewayClient;
+            var client = _client;
             if (client == null) { ConnectionWarning.Visibility = Visibility.Visible; return; }
             btn.IsEnabled = false;
             try
@@ -165,7 +176,7 @@ public sealed partial class ChannelsPage : Page
     {
         if (sender is Button btn && btn.Tag is string name)
         {
-            var client = _hub?.GatewayClient;
+            var client = _client;
             if (client == null) { ConnectionWarning.Visibility = Visibility.Visible; return; }
             btn.IsEnabled = false;
             try

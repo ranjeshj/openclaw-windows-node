@@ -12,33 +12,24 @@ namespace OpenClawTray.Services;
 /// </summary>
 internal sealed class CommandCenterBuilder
 {
-    private readonly AppModel _model;
+    private readonly AppState _model;
     private readonly SettingsManager? _settings;
-    private readonly Func<GatewayNodeInfo?> _localNodeProvider;
-    private readonly Func<bool> _nodeIsPendingApproval;
-    private readonly Func<string?> _nodeFullDeviceId;
-    private readonly Func<string?> _nodeShortDeviceId;
+    private readonly INodeRuntimeInfo _nodeInfo;
     private readonly SshTunnelService? _sshTunnelService;
     private readonly Func<DateTime> _lastCheckTimeProvider;
     private readonly Func<IOperatorGatewayClient?> _operatorClientProvider;
 
     public CommandCenterBuilder(
-        AppModel model,
+        AppState model,
         SettingsManager? settings,
-        Func<GatewayNodeInfo?> localNodeProvider,
-        Func<bool> nodeIsPendingApproval,
-        Func<string?> nodeFullDeviceId,
-        Func<string?> nodeShortDeviceId,
+        INodeRuntimeInfo nodeInfo,
         SshTunnelService? sshTunnelService,
         Func<DateTime> lastCheckTimeProvider,
         Func<IOperatorGatewayClient?> operatorClientProvider)
     {
         _model = model;
         _settings = settings;
-        _localNodeProvider = localNodeProvider;
-        _nodeIsPendingApproval = nodeIsPendingApproval;
-        _nodeFullDeviceId = nodeFullDeviceId;
-        _nodeShortDeviceId = nodeShortDeviceId;
+        _nodeInfo = nodeInfo;
         _sshTunnelService = sshTunnelService;
         _lastCheckTimeProvider = lastCheckTimeProvider;
         _operatorClientProvider = operatorClientProvider;
@@ -47,7 +38,7 @@ internal sealed class CommandCenterBuilder
     public GatewayCommandCenterState Build()
     {
         var nodes = _model.Nodes.Select(NodeCapabilityHealthInfo.FromNode).ToList();
-        if (nodes.Count == 0 && _localNodeProvider() is { } localNode)
+        if (nodes.Count == 0 && _nodeInfo.LocalNode is { } localNode)
         {
             nodes.Add(NodeCapabilityHealthInfo.FromNode(localNode));
         }
@@ -78,8 +69,8 @@ internal sealed class CommandCenterBuilder
             });
         }
 
-        var fullDeviceId = _nodeFullDeviceId();
-        if (_nodeIsPendingApproval() && !string.IsNullOrWhiteSpace(fullDeviceId))
+        var fullDeviceId = _nodeInfo.FullDeviceId;
+        if (_nodeInfo.IsPendingApproval && !string.IsNullOrWhiteSpace(fullDeviceId))
         {
             var approvalCommand = $"openclaw devices approve {fullDeviceId}";
             warnings.Add(new GatewayDiagnosticWarning
@@ -87,7 +78,7 @@ internal sealed class CommandCenterBuilder
                 Severity = GatewayDiagnosticSeverity.Warning,
                 Category = "pairing",
                 Title = "Node is waiting for approval",
-                Detail = $"Approve device {_nodeShortDeviceId()} from the gateway CLI, then re-open the command center after reconnect.",
+                Detail = $"Approve device {_nodeInfo.ShortDeviceId} from the gateway CLI, then re-open the command center after reconnect.",
                 RepairAction = "Copy approval command",
                 CopyText = approvalCommand
             });

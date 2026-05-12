@@ -3,8 +3,9 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using OpenClaw.Shared;
-using OpenClawTray.Windows;
+using OpenClawTray.Services;
 using System;
+using System.ComponentModel;
 using System.Linq;
 using System.Text.Json;
 
@@ -12,7 +13,10 @@ namespace OpenClawTray.Pages;
 
 public sealed partial class HomePage : Page
 {
-    private HubWindow? _hub;
+    private IOperatorGatewayClient? _client;
+    private SettingsManager? _settings;
+    private Action<string>? _dispatch;
+    private AppState? _state;
     private bool _buttonsWired;
     private ConnectionStatus _lastStatus = ConnectionStatus.Disconnected;
     private SessionInfo[]? _lastSessions;
@@ -22,30 +26,55 @@ public sealed partial class HomePage : Page
         InitializeComponent();
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state, IOperatorGatewayClient? client, SettingsManager? settings, Action<string>? dispatch)
     {
-        _hub = hub;
+        _state = state;
+        _client = client;
+        _settings = settings;
+        _dispatch = dispatch;
+        if (_state != null)
+            _state.PropertyChanged += OnStateChanged;
 
-        UpdateConnectionStatus(hub.CurrentStatus, hub.Settings?.GetEffectiveGatewayUrl());
+        UpdateConnectionStatus(state?.Status ?? ConnectionStatus.Disconnected, settings?.GetEffectiveGatewayUrl());
 
-        if (hub.Settings != null)
+        if (settings != null)
         {
-            GatewayUrlText.Text = hub.Settings.GetEffectiveGatewayUrl();
+            GatewayUrlText.Text = settings.GetEffectiveGatewayUrl();
         }
 
-        if (hub.LastSessions != null)
-            UpdateSessions(hub.LastSessions);
+        if (state?.Sessions != null)
+            UpdateSessions(state.Sessions);
 
         if (!_buttonsWired)
         {
-            DashboardButton.Click += (s, e) => _hub?.OpenDashboardAction?.Invoke(null);
-            ChatButton.Click += (s, e) => _hub?.NavigateTo("chat");
+            DashboardButton.Click += (s, e) => _dispatch?.Invoke("dashboard");
+            ChatButton.Click += (s, e) => _dispatch?.Invoke("chat");
             HealthCheckButton.Click += async (s, e) =>
             {
-                if (_hub?.GatewayClient != null) await _hub.GatewayClient.CheckHealthAsync();
+                if (_client != null) await _client.CheckHealthAsync();
             };
             ScanButton.Click += OnScanForGateways;
             _buttonsWired = true;
+        }
+    }
+
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(AppState.Status):
+                UpdateConnectionStatus(_state!.Status, _settings?.GetEffectiveGatewayUrl());
+                break;
+            case nameof(AppState.Sessions):
+                UpdateSessions(_state!.Sessions);
+                break;
+            case nameof(AppState.Nodes):
+                UpdateNodes(_state!.Nodes);
+                break;
+            case nameof(AppState.AgentsList):
+                if (_state!.AgentsList.HasValue)
+                    UpdateAgentsList(_state.AgentsList.Value);
+                break;
         }
     }
 
@@ -205,7 +234,7 @@ public sealed partial class HomePage : Page
 
                 foreach (var gw in gateways)
                 {
-                    var currentUrl = _hub?.Settings?.GetEffectiveGatewayUrl() ?? "";
+                    var currentUrl = _settings?.GetEffectiveGatewayUrl() ?? "";
                     bool isSelected = false;
                     try
                     {
@@ -254,11 +283,11 @@ public sealed partial class HomePage : Page
                         var capturedGw = gw;
                         selectBtn.Click += (s, args) =>
                         {
-                            if (_hub?.Settings != null)
+                            if (_settings != null)
                             {
-                                _hub.Settings.GatewayUrl = capturedGw.HttpUrl;
-                                _hub.Settings.Save();
-                                _hub.ConnectAction?.Invoke();
+                                _settings.GatewayUrl = capturedGw.HttpUrl;
+                                _settings.Save();
+                                _dispatch?.Invoke("reconnect");
                                 GatewayUrlText.Text = capturedGw.HttpUrl;
                                 dialog.Hide();
                             }

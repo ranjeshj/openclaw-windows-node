@@ -3,9 +3,11 @@ using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using OpenClawTray.Windows;
+using OpenClaw.Shared;
+using OpenClawTray.Services;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -16,7 +18,9 @@ public sealed partial class ConfigPage : Page
 {
     private static readonly JsonElement s_emptyObject = JsonDocument.Parse("{}").RootElement.Clone();
 
-    private HubWindow? _hub;
+    private IOperatorGatewayClient? _client;
+    private AppState? _state;
+    private Action<string>? _dispatch;
     private JsonElement? _lastConfig;
     private JsonElement? _lastSchema;
     private string? _baseHash;
@@ -31,14 +35,34 @@ public sealed partial class ConfigPage : Page
         InitializeComponent();
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state, IOperatorGatewayClient? client, Action<string>? dispatch)
     {
-        _hub = hub;
+        _state = state;
+        _client = client;
+        _dispatch = dispatch;
+        if (_state != null)
+            _state.PropertyChanged += OnStateChanged;
         OpenClawTray.Services.Logger.Info("[ConfigPage] Initialize");
-        if (hub.GatewayClient != null)
+        if (client != null)
         {
-            _ = hub.GatewayClient.RequestConfigSchemaAsync();
-            _ = hub.GatewayClient.RequestConfigAsync();
+            _ = client.RequestConfigSchemaAsync();
+            _ = client.RequestConfigAsync();
+        }
+        // Seed from cached state
+        if (_state?.ConfigSchema.HasValue == true) UpdateConfigSchema(_state.ConfigSchema.Value);
+        if (_state?.Config.HasValue == true) UpdateConfig(_state.Config.Value);
+    }
+
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(AppState.Config):
+                if (_state!.Config.HasValue) UpdateConfig(_state.Config.Value);
+                break;
+            case nameof(AppState.ConfigSchema):
+                if (_state!.ConfigSchema.HasValue) UpdateConfigSchema(_state.ConfigSchema.Value);
+                break;
         }
     }
 
@@ -212,7 +236,7 @@ public sealed partial class ConfigPage : Page
 
     private void OnOpenDashboard(object sender, RoutedEventArgs e)
     {
-        _hub?.OpenDashboardAction?.Invoke("config");
+        _dispatch?.Invoke("dashboard:config");
     }
 
     private static void ExpandAll(IList<TreeViewNode> nodes)
@@ -245,7 +269,7 @@ public sealed partial class ConfigPage : Page
             return;
         }
 
-        if (_hub?.GatewayClient == null || !_lastConfig.HasValue)
+        if (_client == null || !_lastConfig.HasValue)
         {
             SaveStatus.Text = "Not connected";
             return;
@@ -273,13 +297,13 @@ public sealed partial class ConfigPage : Page
         SaveStatus.Text = "Saving...";
         try
         {
-            var ok = await _hub.GatewayClient.PatchConfigAsync(updatedElement, _baseHash);
+            var ok = await _client!.PatchConfigAsync(updatedElement, _baseHash);
             SaveStatus.Text = ok ? "✓ Saved" : "✗ Save failed — changes preserved";
 
             if (ok)
             {
                 _pendingChanges.Clear();
-                _ = _hub.GatewayClient.RequestConfigAsync();
+                _ = _client.RequestConfigAsync();
             }
         }
         catch (Exception) { SaveStatus.Text = "✗ Save failed — changes preserved"; }
@@ -334,11 +358,11 @@ public sealed partial class ConfigPage : Page
 
     private void OnRefresh(object sender, RoutedEventArgs e)
     {
-        if (_hub?.GatewayClient != null)
+        if (_client != null)
         {
             SaveStatus.Text = "";
-            _ = _hub.GatewayClient.RequestConfigSchemaAsync();
-            _ = _hub.GatewayClient.RequestConfigAsync();
+            _ = _client.RequestConfigSchemaAsync();
+            _ = _client.RequestConfigAsync();
         }
     }
 
@@ -721,20 +745,20 @@ public sealed partial class ConfigPage : Page
 
     private void OnValueEdited(string configPath, object newValue)
     {
-        if (_hub?.GatewayClient == null) return;
+        if (_client == null) return;
 
         _ = Task.Run(async () =>
         {
             try
             {
-                var success = await _hub.GatewayClient.SetConfigAsync(configPath, newValue);
+                var success = await _client!.SetConfigAsync(configPath, newValue);
                 DispatcherQueue?.TryEnqueue(() =>
                 {
                     SaveStatus.Text = success
                         ? $"✅ Sent {configPath}"
                         : $"❌ Failed to save {configPath}";
-                    if (success && _hub?.GatewayClient != null)
-                        _ = _hub.GatewayClient.RequestConfigAsync();
+                    if (success && _client != null)
+                        _ = _client.RequestConfigAsync();
                 });
             }
             catch (Exception ex)

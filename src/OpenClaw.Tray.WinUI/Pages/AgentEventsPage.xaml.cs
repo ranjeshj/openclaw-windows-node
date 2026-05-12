@@ -5,7 +5,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using OpenClaw.Shared;
-using OpenClawTray.Windows;
+using OpenClawTray.Services;
 
 namespace OpenClawTray.Pages;
 
@@ -13,14 +13,28 @@ public sealed partial class AgentEventsPage : Page
 {
     private const int MaxEvents = 400;
     private readonly List<AgentEventInfo> _allEvents = new();
+    private AppState? _state;
     private string _activeFilter = "all";
     private string? _agentIdFilter;
     private bool _filterDirty;
 
-    /// <summary>Set by HubWindow so Clear can also clear the central cache.</summary>
+    /// <summary>Set by the parent so Clear can also clear the central cache.</summary>
     public Action? ClearCentralCache { get; set; }
 
     public int EventCount => _allEvents.Count;
+
+    /// <summary>Subscribe to AppState.AgentEventAdded for direct observation.</summary>
+    internal void SetAppState(AppState? state)
+    {
+        if (_state != null) _state.AgentEventAdded -= OnAgentEventAdded;
+        _state = state;
+        if (_state != null) _state.AgentEventAdded += OnAgentEventAdded;
+    }
+
+    private void OnAgentEventAdded(AgentEventInfo evt)
+    {
+        DispatcherQueue?.TryEnqueue(() => AddEvent(evt));
+    }
 
     /// <summary>Filter events to a specific agent by session key prefix.</summary>
     public void SetAgentFilter(string? agentId)
@@ -29,12 +43,12 @@ public sealed partial class AgentEventsPage : Page
         ApplyFilter();
     }
 
-    public void PopulateAgentFilter(HubWindow hub)
+    public void PopulateAgentFilter(Func<List<string>> getAgentIds)
     {
         AgentFilterCombo.SelectionChanged -= OnAgentFilterComboChanged;
         AgentFilterCombo.Items.Clear();
         AgentFilterCombo.Items.Add(new ComboBoxItem { Content = "All Agents", Tag = "" });
-        foreach (var id in hub.GetAgentIds())
+        foreach (var id in getAgentIds())
             AgentFilterCombo.Items.Add(new ComboBoxItem { Content = id, Tag = id });
         AgentFilterCombo.SelectedIndex = 0;
         AgentFilterCombo.SelectionChanged += OnAgentFilterComboChanged;

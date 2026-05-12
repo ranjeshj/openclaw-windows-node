@@ -4,7 +4,6 @@ using Microsoft.Web.WebView2.Core;
 using OpenClaw.Shared;
 using OpenClawTray.Services;
 using OpenClawTray.Services.Connection;
-using OpenClawTray.Windows;
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -14,7 +13,8 @@ namespace OpenClawTray.Pages;
 
 public sealed partial class ChatPage : Page
 {
-    private HubWindow? _hub;
+    private SettingsManager? _settings;
+    private GatewayRegistry? _gatewayRegistry;
     private string _chatUrl = "";
     private bool _webViewInitialized;
     private global::Windows.Foundation.TypedEventHandler<CoreWebView2, CoreWebView2NavigationCompletedEventArgs>? _navCompletedHandler;
@@ -37,12 +37,13 @@ public sealed partial class ChatPage : Page
         }
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(SettingsManager? settings, GatewayRegistry? gatewayRegistry)
     {
-        _hub = hub;
-        if (!_webViewInitialized && hub.Settings != null)
+        _settings = settings;
+        _gatewayRegistry = gatewayRegistry;
+        if (!_webViewInitialized && settings != null)
         {
-            _ = InitializeWebViewAsync(hub.Settings);
+            _ = InitializeWebViewAsync(settings);
         }
     }
 
@@ -52,7 +53,7 @@ public sealed partial class ChatPage : Page
         {
             if (!InteractiveGatewayCredentialResolver.TryResolve(
                 settings,
-                _hub?.GatewayRegistry,
+                _gatewayRegistry,
                 SettingsManager.SettingsDirectoryPath,
                 DeviceIdentityFileReader.Instance,
                 out var credential) ||

@@ -24,6 +24,7 @@ using System.Threading.Tasks;
 using Updatum;
 using Windows.ApplicationModel.DataTransfer;
 using WinUIEx;
+using WindowManager = OpenClawTray.Services.WindowManager;
 
 namespace OpenClawTray;
 
@@ -58,7 +59,8 @@ public partial class App : Application
     public GatewayRegistry? Registry => _gatewayRegistry;
     public GatewayConnectionManager? ConnectionManager => _connectionManager;
     internal SettingsManager Settings => _settings ?? throw new InvalidOperationException("Settings are not initialized.");
-    internal AppModel Model => _appModel;
+    internal AppState Model => _appModel;
+    internal NodeCoordinator? NodeCoordinator => _nodeCoordinator;
 
     /// <summary>
     /// Ensures the managed SSH tunnel is started using the current settings.
@@ -128,8 +130,8 @@ public partial class App : Application
     /// Used by onboarding pages that need to host file pickers / dialogs.
     /// </summary>
     public IntPtr GetOnboardingWindowHandle()
-        => _onboardingWindow != null
-            ? WinRT.Interop.WindowNative.GetWindowHandle(_onboardingWindow)
+        => _windowManager?.OnboardingWindow != null
+            ? WinRT.Interop.WindowNative.GetWindowHandle(_windowManager.OnboardingWindow)
             : IntPtr.Zero;
 
     private SettingsManager? _settings;
@@ -139,17 +141,13 @@ public partial class App : Application
     private DiagnosticsClipboardService? _diagnosticsCopy;
     private CommandCenterBuilder? _commandCenterBuilder;
     private ToastService? _toastService;
-    private AppModel _appModel = new();
-    private GatewayDataBridge? _dataBridge;
+    private AppState _appModel = new();
     private Mutex? _mutex;
     private Microsoft.UI.Dispatching.DispatcherQueue? _dispatcherQueue;
     private CancellationTokenSource? _deepLinkCts;
     private bool _isExiting;
     
-    private DateTime _lastPreviewRequestUtc = DateTime.MinValue;
-    private DateTime _lastCheckTime = DateTime.Now;
-    private DateTime _lastUsageActivityLogUtc = DateTime.MinValue;
-    private string? _lastChannelStatusSignature;
+    private GatewayService? _gatewayService;
 
     // FrozenDictionary for O(1) case-insensitive notification type → setting lookup — no per-call allocation.
     private static readonly System.Collections.Frozen.FrozenDictionary<string, Func<SettingsManager, bool>> s_notifTypeMap =
@@ -166,18 +164,10 @@ public partial class App : Application
             ["error"]     = s => s.NotifyUrgent,  // errors follow urgent setting
         }.ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
 
-    // Session-aware activity tracking
-    private readonly Dictionary<string, AgentActivity> _sessionActivities = new();
-    private string? _displayedSessionKey;
-    private DateTime _lastSessionSwitch = DateTime.MinValue;
-    private static readonly TimeSpan SessionSwitchDebounce = TimeSpan.FromSeconds(3);
-
-    // Windows (created on demand)
-    private HubWindow? _hubWindow;
+    // Windows (created on demand — most moved to WindowManager)
+    private WindowManager? _windowManager;
+    private TrayActionDispatcher? _actionDispatcher;
     private TrayMenuWindow? _trayMenuWindow;
-    private QuickSendDialog? _quickSendDialog;
-    private ChatWindow? _chatWindow;
-    private ConnectionStatusWindow? _connectionStatusWindow;
 
     // Bug 3: per-device idempotency for "Node paired" toast. WindowsNodeClient.HandleHelloOk
     // re-fires PairingStatusChanged(Paired) on every WS reconnect; we only want one toast
@@ -185,6 +175,7 @@ public partial class App : Application
     // defense-in-depth.)
     // Node service (optional, enabled in settings)
     private NodeService? _nodeService;
+    private NodeCoordinator? _nodeCoordinator;
     
     // Keep-alive window to anchor WinUI runtime (prevents GC/threading issues)
     private Window? _keepAliveWindow;
@@ -419,6 +410,48 @@ public partial class App : Application
 
         _diagnosticsCopy = new DiagnosticsClipboardService(() => _commandCenterBuilder!.Build());
         _toastService = new ToastService(_settings);
+        _nodeCoordinator = new NodeCoordinator(
+            _toastService, _settings, _dispatcherQueue!,
+            () => _windowManager?.HubWindow, () => _localSetupEngine,
+            () => UpdateTrayIcon());
+
+        // Create WindowManager before tray icon so onboarding and
+        // surface-improvements-tip can use it immediately.
+        _windowManager = new WindowManager(
+            _appModel,
+            _settings,
+            _dispatcherQueue!,
+            () => _connectionManager,
+            () => _gatewayRegistry,
+            () => _nodeService,
+            _nodeCoordinator,
+            UpdateTrayIcon,
+            IdentityDataPath,
+            ResolveChatCredentialsTuple,
+            CheckForUpdatesUserInitiatedAsync,
+            _toastService);
+        _windowManager.SettingsSaved += OnSettingsSaved;
+
+        _actionDispatcher = new TrayActionDispatcher(
+            _appModel,
+            _windowManager,
+            _settings,
+            () => _connectionManager,
+            () => _nodeService,
+            _toastService,
+            _diagnosticsCopy,
+            _sshTunnelService,
+            _gatewayRegistry,
+            () => _keepAliveWindow,
+            () => RunHealthCheckAsync(userInitiated: true),
+            CheckForUpdatesUserInitiatedAsync,
+            ExitApplication,
+            EnsureSshTunnelConfigured,
+            UpdateTrayIcon);
+
+        // Wire the single dispatch callback now that both WindowManager and
+        // TrayActionDispatcher exist.
+        _windowManager.DispatchAction = action => _actionDispatcher.Dispatch(action);
 
         // Initialize tray icon FIRST(window-less pattern from WinUIEx).
         // The tray is application chrome and must always survive any failure
@@ -427,7 +460,7 @@ public partial class App : Application
         // propagate through `await ShowOnboardingAsync()` and abort OnLaunched
         // before the tray ever initializes.
         InitializeTrayIcon();
-        ShowSurfaceImprovementsTipIfNeeded();
+        _windowManager.ShowSurfaceImprovementsTipIfNeeded();
 
         // First-run check (also supports forced onboarding for testing).
         // Wrapped in try/catch so a wizard construction failure cannot tear
@@ -437,7 +470,7 @@ public partial class App : Application
             if (RequiresSetup(_settings) ||
                 Environment.GetEnvironmentVariable("OPENCLAW_FORCE_ONBOARDING") == "1")
             {
-                await ShowOnboardingAsync();
+                await _windowManager.ShowOnboardingAsync();
             }
         }
         catch (Exception ex)
@@ -464,30 +497,21 @@ public partial class App : Application
             isNodeEnabled: ShouldInitializeNodeService,
             diagnostics: diagnostics,
             tunnelManager: tunnelManager);
-        _dataBridge = new GatewayDataBridge(_appModel);
-        _dataBridge.ConnectionStatusChanged += OnConnectionStatusChanged;
-        _dataBridge.AuthenticationFailed += OnAuthenticationFailed;
-        _dataBridge.ActivityChanged += OnActivityChanged;
-        _dataBridge.ChannelHealthUpdated += OnChannelHealthUpdated;
-        _dataBridge.SessionsUpdated += OnSessionsUpdated;
-        _dataBridge.UsageCostUpdated += OnUsageCostUpdated;
-        _dataBridge.GatewaySelfUpdated += OnGatewaySelfUpdated;
-        _dataBridge.NodesUpdated += OnNodesUpdated;
-        _dataBridge.SessionCommandCompleted += OnSessionCommandCompleted;
-        _dataBridge.NotificationReceived += OnNotificationReceived;
-        _dataBridge.SessionPreviewUpdated += OnSessionPreviewUpdated;
         _connectionManager.OperatorClientChanged += OnOperatorClientChanged;
         _connectionManager.StateChanged += OnManagerStateChanged;
+
+        _gatewayService = new GatewayService(_appModel, _dispatcherQueue!, () => _connectionManager?.OperatorClient);
+        _gatewayService.ConnectionStatusChanged += OnConnectionStatusChanged;
+        _gatewayService.AuthenticationFailed += OnAuthenticationFailed;
+        _gatewayService.SessionCommandCompleted += OnSessionCommandCompleted;
+        _gatewayService.NotificationReceived += OnNotificationReceived;
 
         _commandCenterBuilder = new CommandCenterBuilder(
             _appModel,
             _settings,
-            () => _nodeService?.GetLocalNodeInfo(),
-            () => _nodeService?.IsPendingApproval == true,
-            () => _nodeService?.FullDeviceId,
-            () => _nodeService?.ShortDeviceId,
+            new NodeRuntimeInfoAdapter(() => _nodeService),
             _sshTunnelService,
-            () => _lastCheckTime,
+            () => _gatewayService.LastCheckTime,
             () => _connectionManager?.OperatorClient);
 
         // Initialize connections — always create operator client for UI data,
@@ -499,7 +523,7 @@ public partial class App : Application
             TryResolveChatCredentials(out var prewarmUrl, out var prewarmToken, out _, out var prewarmIsBootstrapToken) &&
             !prewarmIsBootstrapToken)
         {
-            _chatWindow = new ChatWindow(prewarmUrl, prewarmToken);
+            _windowManager.PrewarmChatWindow(prewarmUrl, prewarmToken);
             // Window is created but hidden — WebView2 initializes in the background
         }
 
@@ -559,154 +583,16 @@ public partial class App : Application
     {
         // Pre-create menu window once - reuse to avoid crash on window creation after idle
         _trayMenuWindow = new TrayMenuWindow();
-        _trayMenuWindow.MenuItemClicked += OnTrayMenuItemClicked;
+        _trayMenuWindow.MenuItemClicked += (s, action) => _actionDispatcher?.Dispatch(action);
         // Don't close - just hide
     }
 
     private void OnTrayIconSelected(TrayIcon sender, TrayIconEventArgs e)
     {
-        ShowChatWindow();
+        _windowManager?.ShowChatWindow();
     }
 
-    internal void ShowChatWindow()
-    {
-        if (_settings == null) return;
-        if (!TryResolveChatCredentials(out var url, out var token, out var credentialSource, out var isBootstrapToken))
-        {
-            ShowConnectionSettingsForPairingIssue(
-                "ChatWindow",
-                "Gateway URL or credential is not configured");
-            return;
-        }
 
-        if (isBootstrapToken)
-        {
-            ShowConnectionSettingsForPairingIssue(
-                "ChatWindow",
-                "Gateway pairing is not complete");
-            return;
-        }
-
-        Logger.Info($"[ChatWindow] Quick-chat credentials resolved from {credentialSource}");
-        if (_chatWindow == null)
-        {
-            _chatWindow = new ChatWindow(url, token);
-        }
-
-        // Bug 2: cached ChatWindow may have been pre-warmed with empty/stale credentials
-        // (built before pairing completed). Refresh on every tray click so quick-chat
-        // follows the same resolver path as the companion-app operator client.
-        _chatWindow.RefreshCredentials(url, token);
-
-        // Toggle: if visible, hide; if hidden, show near tray
-        if (_chatWindow.Visible)
-        {
-            _chatWindow.Hide();
-        }
-        else
-        {
-            // Bug 1: When called from the wizard's close handler, OnboardingWindow.Close()
-            // steals focus on the same UI tick, deactivating ChatWindow → its
-            // OnWindowActivated auto-hides it immediately. Defer the show to a later
-            // dispatcher tick (Low priority) so the close + focus-loss cascade settles
-            // before we make the chat window visible.
-            var window = _chatWindow;
-            var dispatcher = _dispatcherQueue;
-            if (dispatcher != null)
-            {
-                dispatcher.TryEnqueue(
-                    Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
-                    () =>
-                    {
-                        try { window.ShowNearTrayAnimated(); }
-                        catch (Exception ex) { Logger.Warn($"ShowChatWindow deferred show failed: {ex.Message}"); }
-                    });
-            }
-            else
-            {
-                window.ShowNearTrayAnimated();
-            }
-        }
-
-    }
-
-    private void ShowCanvasWindow()
-    {
-        if (_settings?.NodeCanvasEnabled == false)
-        {
-            Logger.Warn("[Canvas] Canvas capability is disabled; opening capability settings");
-            ShowHub("capabilities");
-            return;
-        }
-
-        if (_nodeService == null)
-        {
-            ShowConnectionSettingsForPairingIssue(
-                "Canvas",
-                "Windows node is not initialized");
-            return;
-        }
-
-        if (_nodeService.IsPendingApproval || !_nodeService.IsPaired)
-        {
-            ShowConnectionSettingsForPairingIssue(
-                "Canvas",
-                "Windows node pairing is not complete");
-            return;
-        }
-
-        _nodeService.ShowCanvasWindow();
-    }
-
-    private void ShowConnectionSettingsForPairingIssue(string source, string reason)
-    {
-        Logger.Warn($"[{source}] {reason}; opening connection settings");
-        ShowHub("connection");
-    }
-
-    private VoiceOverlayWindow? _voiceOverlayWindow;
-    private VoiceService? _standaloneVoiceService;
-
-    private void ShowVoiceOverlay()
-    {
-        var voiceService = _nodeService?.VoiceService ?? EnsureStandaloneVoiceService();
-        if (voiceService == null)
-        {
-            // STT not enabled — show settings
-            ShowHub("voice");
-            return;
-        }
-
-        if (_voiceOverlayWindow == null || _voiceOverlayWindow.AppWindow == null)
-        {
-            _voiceOverlayWindow = new VoiceOverlayWindow(voiceService, new AppLogger());
-            _voiceOverlayWindow.Closed += (_, _) => _voiceOverlayWindow = null;
-            // Wire transcription to gateway chat when connected
-            _voiceOverlayWindow.TextSubmitted += text =>
-            {
-                var client = _connectionManager?.OperatorClient;
-                if (client != null && _appModel.Status == ConnectionStatus.Connected)
-                {
-                    _ = client.SendChatMessageAsync(text);
-                }
-            };
-            // Wire Settings button → open the Hub on the Voice & Audio page.
-            _voiceOverlayWindow.SettingsRequested += () =>
-            {
-                _dispatcherQueue?.TryEnqueue(() => ShowHub("voice"));
-            };
-        }
-
-        _voiceOverlayWindow.Activate();
-    }
-
-    private VoiceService? EnsureStandaloneVoiceService()
-    {
-        if (_settings?.NodeSttEnabled != true)
-            return null;
-
-        return _standaloneVoiceService ??= new VoiceService(new AppLogger(), _settings);
-    }
 
     private void OnTrayContextMenu(TrayIcon sender, TrayIconEventArgs e)
     {
@@ -769,7 +655,7 @@ public partial class App : Application
                     UpdateTrayIcon();
                     _appModel.Status = ConnectionStatus.Disconnected;
                 },
-                NavigateHub = (page) => ShowHub(page),
+                NavigateHub = (page) => _windowManager?.ShowHub(page),
                 OnSettingsSaveAndReconnect = () => { _settings?.Save(); _ = _connectionManager?.ReconnectAsync(); },
             };
             TrayMenuBuilder.Build(_trayMenuWindow, menuState, menuCallbacks);
@@ -780,224 +666,6 @@ public partial class App : Application
             LogCrash("ShowTrayMenuPopup", ex);
             Logger.Error($"Failed to show tray menu: {ex.Message}");
         }
-    }
-
-    private void OnTrayMenuItemClicked(object? sender, string action)
-    {
-        switch (action)
-        {
-            case "status": ShowStatusDetail(); break;
-            case "reconnect": _ = _connectionManager?.ReconnectAsync(); break;
-            case "dashboard": OpenDashboard(); break;
-            case "canvas": ShowCanvasWindow(); break;
-            case "openchat": ShowChatWindow(); break;
-            case "voice": ShowVoiceOverlay(); break;
-            case "webchat": ShowWebChat(); break;
-            case "hub": ShowHub(); break;
-            case "companion":
-                // If disconnected, open General page (has connection settings + discovery)
-                // If connected, open Hub at default page
-                if (_appModel.Status != ConnectionStatus.Connected)
-                    ShowHub("general");
-                else
-                    ShowHub();
-                break;
-            case "quicksend": ShowQuickSend(); break;
-            case "history": ShowNotificationHistory(); break;
-            case "activity": ShowActivityStream(); break;
-            case "healthcheck": _ = RunHealthCheckAsync(userInitiated: true); break;
-            case "checkupdates": _ = CheckForUpdatesUserInitiatedAsync(); break;
-            case "settings": ShowSettings(); break;
-            case "setup": _ = ShowOnboardingAsync(); break;
-            case "autostart": ToggleAutoStart(); break;
-            case "log": OpenLogFile(); break;
-            case "logfolder": OpenLogFolder(); break;
-            case "configfolder": OpenConfigFolder(); break;
-            case "diagnosticsfolder": OpenDiagnosticsFolder(); break;
-            case "connectionstatus": ShowConnectionStatusWindow(); break;
-            case "supportcontext": _diagnosticsCopy?.CopySupportContext(); break;
-            case "debugbundle": _diagnosticsCopy?.CopyDebugBundle(); break;
-            case "browsersetup": _diagnosticsCopy?.CopyBrowserSetupGuidance(); break;
-            case "portdiagnostics": _diagnosticsCopy?.CopyPortDiagnostics(); break;
-            case "capabilitydiagnostics": _diagnosticsCopy?.CopyCapabilityDiagnostics(); break;
-            case "nodeinventory": _diagnosticsCopy?.CopyNodeInventory(); break;
-            case "channelsummary": _diagnosticsCopy?.CopyChannelSummary(); break;
-            case "activitysummary": _diagnosticsCopy?.CopyActivitySummary(); break;
-            case "extensibilitysummary": _diagnosticsCopy?.CopyExtensibilitySummary(); break;
-            case "restartsshtunnel": RestartSshTunnel(); break;
-            case "copydeviceid": CopyDeviceIdToClipboard(); break;
-            case "copynodesummary": CopyNodeSummaryToClipboard(); break;
-            case "exit": ExitApplication(); break;
-            default:
-                if (action.StartsWith("session-reset|", StringComparison.Ordinal))
-                    _ = ExecuteSessionActionAsync("reset", action["session-reset|".Length..]);
-                else if (action.StartsWith("session-compact|", StringComparison.Ordinal))
-                    _ = ExecuteSessionActionAsync("compact", action["session-compact|".Length..]);
-                else if (action.StartsWith("session-delete|", StringComparison.Ordinal))
-                    _ = ExecuteSessionActionAsync("delete", action["session-delete|".Length..]);
-                else if (action.StartsWith("session-thinking|", StringComparison.Ordinal))
-                {
-                    var split = action.Split('|', 3);
-                    if (split.Length == 3)
-                        _ = ExecuteSessionActionAsync("thinking", split[2], split[1]);
-                }
-                else if (action.StartsWith("session-verbose|", StringComparison.Ordinal))
-                {
-                    var split = action.Split('|', 3);
-                    if (split.Length == 3)
-                        _ = ExecuteSessionActionAsync("verbose", split[2], split[1]);
-                }
-                else if (action.StartsWith("session:", StringComparison.Ordinal))
-                    OpenDashboard($"sessions/{action[8..]}");
-                else if (action.StartsWith("dashboard:", StringComparison.Ordinal))
-                    OpenDashboard(action["dashboard:".Length..]);
-                else if (action.StartsWith("activity:", StringComparison.Ordinal))
-                    ShowActivityStream(action["activity:".Length..]);
-                else if (action.StartsWith("channel:", StringComparison.Ordinal))
-                    ToggleChannel(action[8..]);
-                else
-                    // Default: treat as a Hub navigation tag (e.g. "nodes", "agent:main:sessions")
-                    ShowHub(action);
-                break;
-        }
-    }
-    
-    private void CopyDeviceIdToClipboard()
-    {
-        if (_nodeService?.FullDeviceId == null) return;
-        
-        try
-        {
-            var dataPackage = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
-            dataPackage.SetText(_nodeService.FullDeviceId);
-            global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
-            
-            // Show toast confirming copy
-            _toastService?.ShowToast(new ToastContentBuilder()
-                .AddText(LocalizationHelper.GetString("Toast_DeviceIdCopied"))
-                .AddText(string.Format(LocalizationHelper.GetString("Toast_DeviceIdCopiedDetail"), _nodeService.ShortDeviceId)));
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn($"Failed to copy device ID: {ex.Message}");
-        }
-    }
-
-    private void CopyNodeSummaryToClipboard()
-    {
-        if (_appModel.Nodes.Length == 0) return;
-
-        try
-        {
-            var lines = _appModel.Nodes.Select(node =>
-            {
-                var state = node.IsOnline ? "online" : "offline";
-                var name = string.IsNullOrWhiteSpace(node.DisplayName) ? node.ShortId : node.DisplayName;
-                return $"{state}: {name} ({node.ShortId}) · {node.DetailText}";
-            });
-            var summary = string.Join(Environment.NewLine, lines);
-
-            var dataPackage = new global::Windows.ApplicationModel.DataTransfer.DataPackage();
-            dataPackage.SetText(summary);
-            global::Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dataPackage);
-
-            _toastService?.ShowToast(new ToastContentBuilder()
-                .AddText(LocalizationHelper.GetString("Toast_NodeSummaryCopied"))
-                .AddText(string.Format(LocalizationHelper.GetString("Toast_NodeSummaryCopiedDetail"), _appModel.Nodes.Length)));
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn($"Failed to copy node summary: {ex.Message}");
-        }
-    }
-
-    private async Task ExecuteSessionActionAsync(string action, string sessionKey, string? value = null)
-    {
-        var client = _connectionManager?.OperatorClient;
-        if (client == null || string.IsNullOrWhiteSpace(sessionKey)) return;
-
-        try
-        {
-            if (action is "reset" or "compact" or "delete")
-            {
-                var title = action switch
-                {
-                    "reset" => "Reset session?",
-                    "compact" => "Compact session log?",
-                    "delete" => "Delete session?",
-                    _ => "Confirm session action"
-                };
-                var body = action switch
-                {
-                    "reset" => $"Start a fresh session for '{sessionKey}'?",
-                    "compact" => $"Keep the latest log lines for '{sessionKey}' and archive the rest?",
-                    "delete" => $"Delete '{sessionKey}' and archive its transcript?",
-                    _ => "Continue?"
-                };
-                var button = action switch
-                {
-                    "reset" => "Reset",
-                    "compact" => "Compact",
-                    "delete" => "Delete",
-                    _ => "Continue"
-                };
-
-                var confirmed = await ConfirmSessionActionAsync(title, body, button);
-                if (!confirmed) return;
-            }
-
-            var sent = action switch
-            {
-                "reset" => await client.ResetSessionAsync(sessionKey),
-                "compact" => await client.CompactSessionAsync(sessionKey, 400),
-                "delete" => await client.DeleteSessionAsync(sessionKey, deleteTranscript: true),
-                "thinking" => await client.PatchSessionAsync(sessionKey, thinkingLevel: value),
-                "verbose" => await client.PatchSessionAsync(sessionKey, verboseLevel: value),
-                _ => false
-            };
-
-            if (!sent)
-            {
-                _toastService?.ShowToast(new ToastContentBuilder()
-                    .AddText(LocalizationHelper.GetString("Toast_SessionActionFailed"))
-                    .AddText(LocalizationHelper.GetString("Toast_SessionActionFailedDetail")));
-                return;
-            }
-
-            if (action is "thinking" or "verbose")
-            {
-                _ = client.RequestSessionsAsync();
-            }
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn($"Session action error ({action}): {ex.Message}");
-            try
-            {
-                _toastService?.ShowToast(new ToastContentBuilder()
-                    .AddText(LocalizationHelper.GetString("Toast_SessionActionFailed"))
-                    .AddText(ex.Message));
-            }
-            catch { }
-        }
-    }
-
-    private async Task<bool> ConfirmSessionActionAsync(string title, string body, string actionLabel)
-    {
-        var root = _keepAliveWindow?.Content as FrameworkElement;
-        if (root?.XamlRoot == null) return false;
-
-        var dialog = new ContentDialog
-        {
-            Title = title,
-            Content = body,
-            PrimaryButtonText = actionLabel,
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Close,
-            XamlRoot = root.XamlRoot
-        };
-        var result = await dialog.ShowAsync();
-        return result == ContentDialogResult.Primary;
     }
 
     private static string TruncateMenuText(string text, int maxLength = 96) =>
@@ -1188,19 +856,20 @@ public partial class App : Application
 
     /// <summary>
     /// Handles the connection manager's OperatorClientChanged event.
-    /// Delegates event wiring to <see cref="GatewayDataBridge"/>.
+    /// Subscribes to all gateway client events directly, replacing the former GatewayDataBridge.
     /// </summary>
     private void OnOperatorClientChanged(object? sender, OperatorClientChangedEventArgs e)
     {
-        _dataBridge?.Attach(e.NewClient, e.OldClient, _settings);
+        _gatewayService?.Attach(e.NewClient, e.OldClient, _settings);
 
         // Update UI references
         _dispatcherQueue?.TryEnqueue(() =>
         {
-            if (_hubWindow != null && !_hubWindow.IsClosed)
+            var hubWindow = _windowManager?.HubWindow;
+            if (hubWindow != null && !hubWindow.IsClosed)
             {
-                _hubWindow.GatewayClient = _connectionManager?.OperatorClient;
-                _hubWindow.CurrentStatus = _appModel.Status;
+                hubWindow.GatewayClient = _connectionManager?.OperatorClient;
+                hubWindow.CurrentStatus = _appModel.Status;
             }
         });
     }
@@ -1226,11 +895,19 @@ public partial class App : Application
             _ => ConnectionStatus.Disconnected
         };
 
-        _appModel.Status = mapped;
-        _dispatcherQueue?.TryEnqueue(() =>
+        if (_dispatcherQueue?.HasThreadAccess == true)
         {
+            _appModel.Status = mapped;
             UpdateTrayIcon();
-        });
+        }
+        else
+        {
+            _dispatcherQueue?.TryEnqueue(() =>
+            {
+                _appModel.Status = mapped;
+                UpdateTrayIcon();
+            });
+        }
     }
 
     private NodeService? EnsureNodeServiceForLocalGatewaySetup(SettingsManager settings)
@@ -1251,12 +928,12 @@ public partial class App : Application
                 settings,
                 enableMcpServer: settings.EnableMcpServer,
                 identityDataPath: IdentityDataPath);
-            _nodeService.StatusChanged += OnNodeStatusChanged;
-            _nodeService.NotificationRequested += OnNodeNotificationRequested;
-            _nodeService.PairingStatusChanged += OnPairingStatusChanged;
-            _nodeService.ChannelHealthUpdated += OnChannelHealthUpdated;
-            _nodeService.InvokeCompleted += OnNodeInvokeCompleted;
-            _nodeService.GatewaySelfUpdated += OnGatewaySelfUpdated;
+            _nodeService.StatusChanged += _nodeCoordinator!.OnNodeStatusChanged;
+            _nodeService.NotificationRequested += _nodeCoordinator.OnNodeNotificationRequested;
+            _nodeService.PairingStatusChanged += _nodeCoordinator.OnPairingStatusChanged;
+            _nodeService.ChannelHealthUpdated += _gatewayService!.OnChannelHealthUpdated;
+            _nodeService.InvokeCompleted += _nodeCoordinator.OnNodeInvokeCompleted;
+            _nodeService.GatewaySelfUpdated += _gatewayService.OnGatewaySelfUpdated;
             return _nodeService;
         }
         catch (Exception ex)
@@ -1277,7 +954,7 @@ public partial class App : Application
             var tcs = new TaskCompletionSource<object?>();
             var queued = _dispatcherQueue?.TryEnqueue(() =>
             {
-                try { ShowHub(page); tcs.SetResult(new { navigated = true, page }); }
+                try { _windowManager?.ShowHub(page); tcs.SetResult(new { navigated = true, page }); }
                 catch (Exception ex) { tcs.SetResult(new { navigated = false, error = ex.Message }); }
             }) ?? false;
             if (!queued) tcs.TrySetResult(new { navigated = false, error = "UI thread unavailable" });
@@ -1323,9 +1000,9 @@ public partial class App : Application
 
         app.ConfigGetHandler = async (path) =>
         {
-            if (_hubWindow?.LastConfig == null) return new { error = "Config not loaded" };
+            if (_windowManager?.HubWindow?.LastConfig == null) return new { error = "Config not loaded" };
             // Config is already redacted by the gateway's redactConfigSnapshot
-            var raw = _hubWindow.LastConfig.Value;
+            var raw = _windowManager.HubWindow.LastConfig.Value;
             var config = raw.TryGetProperty("parsed", out var parsed) ? parsed
                 : (raw.TryGetProperty("config", out var cfg) ? cfg : raw);
             if (!string.IsNullOrEmpty(path))
@@ -1390,8 +1067,8 @@ public partial class App : Application
 
         app.SearchHandler = (query) =>
         {
-            if (_hubWindow == null) return Array.Empty<object>();
-            var commands = _hubWindow.BuildCommandList();
+            if (_windowManager?.HubWindow == null) return Array.Empty<object>();
+            var commands = _windowManager.HubWindow.BuildCommandList();
             var matches = commands
                 .Where(c => c.Title.Contains(query, StringComparison.OrdinalIgnoreCase)
                     || (c.Subtitle?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
@@ -1413,251 +1090,19 @@ public partial class App : Application
         return _settings?.EnableNodeMode == true || _settings?.EnableMcpServer == true;
     }
 
-    private void OnNodeStatusChanged(object? sender, ConnectionStatus status)
-    {
-        Logger.Info($"Node status: {status}");
-        AddRecentActivity($"Node mode {status}", category: "node", dashboardPath: "nodes");
-        
-        // In node-only mode, surface node connection in main status indicator
-        if (_settings?.EnableNodeMode == true)
-        {
-            // Status field is maintained by OnManagerStateChanged — no write needed here.
-            UpdateTrayIcon();
-            _dispatcherQueue?.TryEnqueue(UpdateStatusDetailWindow);
-        }
-
-        // Keep hub node state in sync for ConnectionPage
-        SyncHubNodeState();
-        
-        // Don't show "connected" toast if waiting for pairing - we'll show pairing status instead
-        var nodeService = _nodeService;
-        if (status == ConnectionStatus.Connected && nodeService?.IsPaired == true)
-        {
-            var deviceId = nodeService.FullDeviceId;
-            if (_toastService?.HasRecentToast("node-paired", deviceId) == true)
-            {
-                Logger.Info($"[ToastDeduper] Suppressed node-connected toast after node-paired deviceId={deviceId}");
-                return;
-            }
-
-            try
-            {
-                _toastService?.ShowToast(new ToastContentBuilder()
-                    .AddText(LocalizationHelper.GetString("Toast_NodeModeActive"))
-                    .AddText(LocalizationHelper.GetString("Toast_NodeModeActiveDetail")),
-                    "node-connected",
-                    deviceId);
-            }
-            catch { /* ignore */ }
-        }
-    }
-    
-    private void OnRecordingStateChanged(object? sender, RecordingStateEventArgs args)
-    {
-        var source = args.Type == RecordingType.Screen ? "Screen" : "Camera";
-        if (args.IsActive)
-        {
-            var title = args.Type == RecordingType.Screen
-                ? LocalizationHelper.GetString("Activity_ScreenRecordingStarted")
-                : LocalizationHelper.GetString("Activity_CameraRecordingStarted");
-            var duration = args.DurationMs > 0 ? $" ({args.DurationMs / 1000.0:0.#}s)" : "";
-            AddRecentActivity($"{title}{duration}", category: "node",
-                icon: "🔴",
-                details: string.Format(LocalizationHelper.GetString("Activity_RecordingRequestedByAgent"), source));
-        }
-        else
-        {
-            var title = args.Type == RecordingType.Screen
-                ? LocalizationHelper.GetString("Activity_ScreenRecordingComplete")
-                : LocalizationHelper.GetString("Activity_CameraRecordingComplete");
-            AddRecentActivity(title, category: "node",
-                icon: "✅",
-                details: string.Format(LocalizationHelper.GetString("Activity_RecordingSentToAgent"), source));
-        }
-    }
-
-    private void OnPairingStatusChanged(object? sender, OpenClaw.Shared.PairingStatusEventArgs args)
-    {
-        Logger.Info($"Pairing status: {args.Status}");
-        
-        try
-        {
-            if (args.Status == OpenClaw.Shared.PairingStatus.Pending)
-            {
-                // Bug #2 (manual test 2026-05-05): suppress the "copy pairing command"
-                // toast while the local-setup engine is mid-Phase-14 node-role PairAsync.
-                // The loopback gateway parks the role-upgrade as Pending for ~100ms before
-                // SettingsWindowsTrayNodeProvisioner's pending-approver auto-approves it;
-                // the user never needs to copy the command in that window. Manual
-                // ConnectionPage pairings call ShowPairingPendingNotification directly
-                // (bypassing this event handler), so the suppression scope is exactly
-                // the autopair window.
-                if (LocalGatewaySetupEngine.ShouldSuppressPairingPendingNotification(_localSetupEngine, args.Status))
-                {
-                    Logger.Info($"Suppressing pairing-pending toast: autopair Phase 14 in progress for {args.DeviceId}");
-                    return;
-                }
-                ShowPairingPendingNotification(args.DeviceId);
-            }
-            else if (args.Status == OpenClaw.Shared.PairingStatus.Paired)
-            {
-                // Bug 3: idempotency guard — only show "Node paired" toast/activity once
-                // per device per session. WS reconnects re-fire Paired; suppress duplicates.
-                var deviceKey = args.DeviceId ?? string.Empty;
-                if (_toastService?.TryMarkPairedToastShown(deviceKey) == true)
-                {
-                    AddRecentActivity("Node paired", category: "node", dashboardPath: "nodes", nodeId: args.DeviceId);
-                    _toastService?.ShowToast(new ToastContentBuilder()
-                        .AddText(LocalizationHelper.GetString("Toast_NodePaired"))
-                        .AddText(LocalizationHelper.GetString("Toast_NodePairedDetail")),
-                        "node-paired",
-                        args.DeviceId);
-                }
-                else
-                {
-                    Logger.Info($"Suppressing duplicate Paired toast for device {deviceKey}");
-                }
-            }
-            else if (args.Status == OpenClaw.Shared.PairingStatus.Rejected)
-            {
-                AddRecentActivity("Node pairing rejected", category: "node", dashboardPath: "nodes", nodeId: args.DeviceId, details: args.Message ?? LocalizationHelper.GetString("Toast_PairingRejectedDetail"));
-                _toastService?.ShowToast(new ToastContentBuilder()
-                    .AddText(LocalizationHelper.GetString("Toast_PairingRejected"))
-                    .AddText(LocalizationHelper.GetString("Toast_PairingRejectedDetail")),
-                    "node-pairing-rejected",
-                    args.DeviceId);
-            }
-        }
-        catch { /* ignore */ }
-
-        SyncHubNodeState();
-    }
-
-    /// <summary>
-    /// Pushes current node service state to hub window so ConnectionPage reflects live pairing/identity.
-    /// </summary>
-    private void SyncHubNodeState()
-    {
-        if (_hubWindow == null || _hubWindow.IsClosed) return;
-        if (_nodeService != null)
-        {
-            _hubWindow.NodeIsConnected = _nodeService.IsConnected;
-            _hubWindow.NodeIsPaired = _nodeService.IsPaired;
-            _hubWindow.NodeIsPendingApproval = _nodeService.IsPendingApproval;
-            _hubWindow.NodeShortDeviceId = _nodeService.ShortDeviceId;
-            _hubWindow.NodeFullDeviceId = _nodeService.FullDeviceId;
-            _hubWindow.VoiceServiceInstance = _nodeService.VoiceService;
-        }
-        else
-        {
-            _hubWindow.NodeIsConnected = false;
-            _hubWindow.NodeIsPaired = false;
-            _hubWindow.NodeIsPendingApproval = false;
-        }
-    }
-
-    public static string BuildPairingApprovalCommand(string deviceId) =>
-        $"openclaw devices approve {deviceId}";
-
-    public void ShowPairingPendingNotification(string deviceId, string? approvalCommand = null)
-    {
-        var command = approvalCommand ?? BuildPairingApprovalCommand(deviceId);
-        var shortDeviceId = deviceId.Length > 16 ? deviceId[..16] : deviceId;
-
-        AddRecentActivity("Node pairing pending", category: "node", dashboardPath: "nodes", nodeId: deviceId);
-        _toastService?.ShowToast(new ToastContentBuilder()
-            .AddText(LocalizationHelper.GetString("Toast_PairingPending"))
-            .AddText(string.Format(LocalizationHelper.GetString("Toast_PairingPendingDetail"), shortDeviceId))
-            .AddButton(new ToastButton()
-                .SetContent(LocalizationHelper.GetString("Toast_CopyPairingCommand"))
-                .AddArgument("action", "copy_pairing_command")
-                .AddArgument("command", command)),
-            "node-pairing-pending",
-            deviceId);
-    }
-    
-    private void OnNodeNotificationRequested(object? sender, OpenClaw.Shared.Capabilities.SystemNotifyArgs args)
-    {
-        AddRecentActivity(args.Title, category: "node", dashboardPath: "nodes", details: args.Body);
-
-        // Agent requested a notification via node.invoke system.notify
-        try
-        {
-            _toastService?.ShowToast(new ToastContentBuilder()
-                .AddText(args.Title)
-                .AddText(args.Body));
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn($"Failed to show node notification: {ex.Message}");
-        }
-    }
-
-    private void OnNodeInvokeCompleted(object? sender, NodeInvokeCompletedEventArgs args)
-    {
-        var status = args.Ok ? "completed" : "failed";
-        var durationMs = Math.Max(0, (int)Math.Round(args.Duration.TotalMilliseconds));
-        var details = args.Ok
-            ? $"{GetNodeInvokePrivacyClass(args.Command)} · {durationMs} ms"
-            : $"{GetNodeInvokePrivacyClass(args.Command)} · {durationMs} ms · {args.Error ?? "unknown error"}";
-
-        AddRecentActivity(
-            $"node.invoke {status}: {args.Command}",
-            category: "node.invoke",
-            dashboardPath: "nodes",
-            details: details,
-            nodeId: args.NodeId);
-
-        _dispatcherQueue?.TryEnqueue(UpdateStatusDetailWindow);
-    }
-
-    private static string GetNodeInvokePrivacyClass(string command)
-    {
-        if (string.Equals(command, "screen.record", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(command, "screen.snapshot", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(command, "camera.snap", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(command, "camera.clip", StringComparison.OrdinalIgnoreCase))
-        {
-            return "privacy-sensitive";
-        }
-
-        if (command.StartsWith("system.run", StringComparison.OrdinalIgnoreCase))
-        {
-            return "exec";
-        }
-
-        return "metadata";
-    }
-
     private void OnConnectionStatusChanged(object? sender, ConnectionStatus status)
     {
-        // Status field is maintained by OnManagerStateChanged — no write needed here.
-        DiagnosticsJsonlService.Write("connection.status", new
+        _dispatcherQueue?.TryEnqueue(() =>
         {
-            status = status.ToString(),
-            nodeMode = _settings?.EnableNodeMode == true
+            if (status == ConnectionStatus.Connected)
+            {
+                var hubWindow = _windowManager?.HubWindow;
+                if (hubWindow != null && !hubWindow.IsClosed)
+                    hubWindow.LastAuthError = null;
+            }
+
+            UpdateTrayIcon();
         });
-        if (status == ConnectionStatus.Connected)
-        {
-            _appModel.AuthFailureMessage = null;
-            if (_hubWindow != null && !_hubWindow.IsClosed)
-                _hubWindow.LastAuthError = null;
-        }
-
-        // Clear stale data when disconnected so tray menu doesn't show old sessions/nodes
-        if (status == ConnectionStatus.Disconnected || status == ConnectionStatus.Error)
-        {
-            _appModel.Sessions = Array.Empty<SessionInfo>();
-            _appModel.Channels = Array.Empty<ChannelHealth>();
-            _appModel.Nodes = Array.Empty<GatewayNodeInfo>();
-            _appModel.NodePairList = null;
-            _appModel.DevicePairList = null;
-            _appModel.ModelsList = null;
-            _appModel.GatewaySelf = null;
-        }
-
-        UpdateTrayIcon();
-        _dispatcherQueue?.TryEnqueue(UpdateStatusDetailWindow);
         
         if (status == ConnectionStatus.Connected)
         {
@@ -1667,166 +1112,18 @@ public partial class App : Application
 
     private void OnAuthenticationFailed(object? sender, string message)
     {
-        _appModel.AuthFailureMessage = message;
-        Logger.Error($"Authentication failed: {message}");
-        DiagnosticsJsonlService.Write("connection.auth_failed", new
-        {
-            message,
-            nodeMode = _settings?.EnableNodeMode == true
-        });
-        AddRecentActivity($"Auth failed: {message}", category: "error");
-        UpdateTrayIcon();
-
-        // Forward to hub/connection page
-        if (_hubWindow != null && !_hubWindow.IsClosed)
-        {
-            _hubWindow.LastAuthError = message;
-            _hubWindow.UpdateStatus(_appModel.Status);
-        }
-    }
-
-    private void OnActivityChanged(object? sender, AgentActivity? activity)
-    {
-        if (activity == null)
-        {
-            // Activity ended
-            if (_displayedSessionKey != null && _sessionActivities.ContainsKey(_displayedSessionKey))
-            {
-                _sessionActivities.Remove(_displayedSessionKey);
-            }
-            _appModel.CurrentActivity = null;
-        }
-        else
-        {
-            var sessionKey = activity.SessionKey ?? "default";
-            _sessionActivities[sessionKey] = activity;
-            AddRecentActivity(
-                $"{sessionKey}: {activity.Label}",
-                category: "session",
-                dashboardPath: $"sessions/{sessionKey}",
-                details: activity.Kind.ToString(),
-                sessionKey: sessionKey);
-
-            // Debounce session switching
-            var now = DateTime.Now;
-            if (_displayedSessionKey != sessionKey && 
-                (now - _lastSessionSwitch) > SessionSwitchDebounce)
-            {
-                _displayedSessionKey = sessionKey;
-                _lastSessionSwitch = now;
-            }
-
-            if (_displayedSessionKey == sessionKey)
-            {
-                _appModel.CurrentActivity = activity;
-            }
-        }
-        
-        UpdateTrayIcon();
-    }
-
-    private void OnChannelHealthUpdated(object? sender, ChannelHealth[] channels)
-    {
-        _appModel.Channels = channels;
-        _lastCheckTime = DateTime.Now;
-        var signature = string.Join("|", channels
-            .OrderBy(c => c.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(c => $"{c.Name}:{c.Status}:{c.Error}"));
-        if (!string.Equals(signature, _lastChannelStatusSignature, StringComparison.Ordinal))
-        {
-            _lastChannelStatusSignature = signature;
-            var summary = channels.Length == 0
-                ? "No channels reported"
-                : string.Join(", ", channels.Select(c => $"{c.Name}={c.Status}"));
-            DiagnosticsJsonlService.Write("gateway.health.channels", new
-            {
-                channelCount = channels.Length,
-                healthyCount = channels.Count(c => ChannelHealth.IsHealthyStatus(c.Status)),
-                errorCount = channels.Count(c => !string.IsNullOrWhiteSpace(c.Error))
-            });
-            AddRecentActivity("Channel health updated", category: "channel", dashboardPath: "channels", details: summary);
-        }
-    }
-
-    private void OnSessionsUpdated(object? sender, SessionInfo[] sessions)
-    {
-        _appModel.Sessions = sessions;
-        _dispatcherQueue?.TryEnqueue(UpdateStatusDetailWindow);
-
-        var activeKeys= new HashSet<string>(sessions.Select(s => s.Key), StringComparer.Ordinal);
-        _appModel.PruneSessionPreviews(activeKeys);
-
-        if (_connectionManager?.OperatorClient != null &&
-            sessions.Length > 0 &&
-            DateTime.UtcNow - _lastPreviewRequestUtc > TimeSpan.FromSeconds(5))
-        {
-            _lastPreviewRequestUtc = DateTime.UtcNow;
-            var keys = sessions.Take(5).Select(s => s.Key).ToArray();
-            _ = _connectionManager.OperatorClient.RequestSessionPreviewAsync(keys, limit: 3, maxChars: 140);
-        }
-    }
-
-
-
-    private void OnUsageCostUpdated(object? sender, GatewayCostUsageInfo usageCost)
-    {
-        _appModel.UsageCost = usageCost;
-        _dispatcherQueue?.TryEnqueue(UpdateStatusDetailWindow);
-
-        if (DateTime.UtcNow - _lastUsageActivityLogUtc > TimeSpan.FromMinutes(1))
-        {
-            _lastUsageActivityLogUtc = DateTime.UtcNow;
-            AddRecentActivity(
-                $"{usageCost.Days}d usage ${usageCost.Totals.TotalCost:F2}",
-                category: "usage",
-                dashboardPath: "usage",
-                details: $"{usageCost.Totals.TotalTokens:N0} tokens");
-        }
-    }
-
-    private void OnGatewaySelfUpdated(object? sender, GatewaySelfInfo gatewaySelf)
-    {
-        _appModel.GatewaySelf = _appModel.GatewaySelf?.Merge(gatewaySelf) ?? gatewaySelf;
-        DiagnosticsJsonlService.Write("gateway.self", new
-        {
-            version = _appModel.GatewaySelf.ServerVersion,
-            protocol = _appModel.GatewaySelf.Protocol,
-            uptimeMs = _appModel.GatewaySelf.UptimeMs,
-            authMode = _appModel.GatewaySelf.AuthMode,
-            stateVersionPresence = _appModel.GatewaySelf.StateVersionPresence,
-            stateVersionHealth = _appModel.GatewaySelf.StateVersionHealth,
-            presenceCount = _appModel.GatewaySelf.PresenceCount
-        });
         _dispatcherQueue?.TryEnqueue(() =>
         {
-            UpdateStatusDetailWindow();
+            UpdateTrayIcon();
+
+            // Forward to hub/connection page
+            var hubWindow = _windowManager?.HubWindow;
+            if (hubWindow != null && !hubWindow.IsClosed)
+            {
+                hubWindow.LastAuthError = message;
+                hubWindow.UpdateStatus(_appModel.Status);
+            }
         });
-    }
-
-    private void OnNodesUpdated(object? sender, GatewayNodeInfo[] nodes)
-    {
-        var previousCount = _appModel.Nodes.Length;
-        var previousOnline = _appModel.Nodes.Count(n => n.IsOnline);
-        var online = nodes.Count(n => n.IsOnline);
-        _appModel.Nodes = nodes;
-        _dispatcherQueue?.TryEnqueue(UpdateStatusDetailWindow);
-
-        if (nodes.Length != previousCount || online != previousOnline)
-        {
-            AddRecentActivity(
-                $"Nodes {online}/{nodes.Length} online",
-                category: "node",
-                dashboardPath: "nodes");
-        }
-    }
-
-    private void OnSessionPreviewUpdated(object? sender, SessionsPreviewPayloadInfo payload)
-    {
-        foreach (var preview in payload.Previews)
-        {
-            _appModel.SetSessionPreview(preview.Key, preview);
-        }
-        _dispatcherQueue?.TryEnqueue(UpdateStatusDetailWindow);
     }
 
     private void OnSessionCommandCompleted(object? sender, SessionCommandResult result)
@@ -1876,24 +1173,19 @@ public partial class App : Application
 
     private void OnNotificationReceived(object? sender, OpenClawNotification notification)
     {
-        AddRecentActivity(
-            $"{notification.Type ?? "info"}: {notification.Title ?? "notification"}",
-            category: "notification",
-            details: notification.Message);
-
         // Voice overlay: show agent chat responses, and (independently) speak them
         // if the user enabled "Read responses aloud". TTS used to be gated on
         // an active voice overlay session — we want the toggle to honor every
         // chat reply now that voice and text chat will eventually share one UI.
         if (notification.IsChat && !string.IsNullOrEmpty(notification.Message))
         {
-            if (_voiceOverlayWindow != null)
+            if (_windowManager?.VoiceOverlayWindow != null)
             {
                 _dispatcherQueue?.TryEnqueue(() =>
                 {
                     try
                     {
-                        _voiceOverlayWindow?.AddAgentResponse(notification.Message);
+                        _windowManager?.VoiceOverlayWindow?.AddAgentResponse(notification.Message);
                     }
                     catch { }
                 });
@@ -1960,9 +1252,10 @@ public partial class App : Application
         // Suppress chat notifications when a chat window is already showing them
         if (notification.IsChat)
         {
-            if (_hubWindow != null && !_hubWindow.IsClosed)
+            var hubWindow = _windowManager?.HubWindow;
+            if (hubWindow != null && !hubWindow.IsClosed)
                 return false;
-            if (_onboardingWindow != null)
+            if (_windowManager?.OnboardingWindow != null)
                 return false; // Onboarding window has chat overlay
         }
 
@@ -1970,10 +1263,6 @@ public partial class App : Application
         if (type == null) return true;
         return s_notifTypeMap.TryGetValue(type, out var selector) ? selector(_settings) : true;
     }
-
-    #endregion
-
-    #region Health Check
 
     /// <summary>User-initiated health check (from UI button). No background timers.</summary>
     private async Task RunHealthCheckAsync(bool userInitiated = false)
@@ -1983,8 +1272,7 @@ public partial class App : Application
         {
             if (_settings?.EnableNodeMode == true && _nodeService?.IsConnected == true)
             {
-                _lastCheckTime = DateTime.Now;
-                _dispatcherQueue?.TryEnqueue(UpdateStatusDetailWindow);
+                if (_gatewayService != null) _gatewayService.LastCheckTime = DateTime.Now;
                 if (userInitiated)
                 {
                     _toastService?.ShowToast(new ToastContentBuilder()
@@ -2005,7 +1293,7 @@ public partial class App : Application
 
         try
         {
-            _lastCheckTime = DateTime.Now;
+            if (_gatewayService != null) _gatewayService.LastCheckTime = DateTime.Now;
             await client.CheckHealthAsync();
             if (userInitiated)
             {
@@ -2097,7 +1385,7 @@ public partial class App : Application
             $"OpenClaw Tray — {_appModel.Status}",
             $"Topology: {topology.DisplayName}",
             $"Channels: {channelReady}/{_appModel.Channels.Length} ready · Nodes: {nodeOnline}/{nodeTotal} online",
-            $"Warnings: {warningCount} · Last check: {_lastCheckTime:HH:mm:ss}"
+            $"Warnings: {warningCount} · Last check: {(_gatewayService?.LastCheckTime ?? DateTime.Now):HH:mm:ss}"
         };
 
         if (_appModel.CurrentActivity != null && !string.IsNullOrEmpty(_appModel.CurrentActivity.DisplayText))
@@ -2112,123 +1400,16 @@ public partial class App : Application
 
     #region Window Management
 
+    /// <summary>
+    /// Forwarding method for callers that reference App.ShowHub directly
+    /// (e.g. OnboardingWindow, AppCapability NavigateHandler).
+    /// </summary>
     internal void ShowHub(string? navigateTo = null, bool activate = true)
-    {
-        if (_hubWindow == null || _hubWindow.IsClosed)
-        {
-            _hubWindow = new HubWindow();
-            _hubWindow.AppModel = _appModel;
-            _hubWindow.Settings = _settings;
-            _hubWindow.GatewayClient = _connectionManager?.OperatorClient;
-            _hubWindow.CurrentStatus = _appModel.Status;
-            _hubWindow.OpenDashboardAction = OpenDashboard;
-            _hubWindow.CheckForUpdatesAction = () => _ = CheckForUpdatesUserInitiatedAsync();
-            _hubWindow.QuickSendAction = () => ShowQuickSend();
-            _hubWindow.OpenSetupAction = () => _ = ShowOnboardingAsync();
-            _hubWindow.OpenConnectionStatusAction = ShowConnectionStatusWindow;
-            _hubWindow.ConnectionManager = _connectionManager;
-            _hubWindow.GatewayRegistry = _gatewayRegistry;
-            _hubWindow.ConnectAction = () =>
-            {
-                _ = _connectionManager?.ReconnectAsync();
-            };
-            _hubWindow.DisconnectAction = () =>
-            {
-                _ = _connectionManager?.DisconnectAsync();
-                // Status is updated by OnManagerStateChanged when disconnect completes.
-                UpdateTrayIcon();
-                _appModel.Status = ConnectionStatus.Disconnected;
-            };
-            _hubWindow.ReconnectAction = () =>
-            {
-                _ = _connectionManager?.ReconnectAsync();
-            };
-            _hubWindow.ClearAppAgentEventsCache = () => _appModel.ClearAgentEvents();
-            if (_nodeService != null)
-            {
-                _hubWindow.NodeIsConnected = _nodeService.IsConnected;
-                _hubWindow.NodeIsPaired = _nodeService.IsPaired;
-                _hubWindow.NodeIsPendingApproval = _nodeService.IsPendingApproval;
-                _hubWindow.NodeShortDeviceId = _nodeService.ShortDeviceId;
-                _hubWindow.NodeFullDeviceId = _nodeService.FullDeviceId;
-            }
-            _hubWindow.VoiceServiceInstance = _nodeService?.VoiceService ?? _standaloneVoiceService;
-            _hubWindow.SettingsSaved += OnSettingsSaved;
-            _hubWindow.Closed += (s, e) =>
-            {
-                _hubWindow.SettingsSaved -= OnSettingsSaved;
-                _hubWindow = null;
-            };
-
-            // Seed ALL cached data BEFORE first navigation so pages see data in Initialize()
-            SeedHubCachedData();
-
-            // Navigate to default page now that properties and data are set
-            _hubWindow.NavigateToDefault();
-        }
-        // Always update live state
-        if (_hubWindow.AppModel == null)
-            _hubWindow.AppModel = _appModel;
-        _hubWindow.Settings = _settings;
-        _hubWindow.GatewayClient = _connectionManager?.OperatorClient;
-        _hubWindow.CurrentStatus = _appModel.Status;
-        _hubWindow.VoiceServiceInstance = _nodeService?.VoiceService ?? _standaloneVoiceService;
-        if (_nodeService != null)
-        {
-            _hubWindow.NodeIsConnected = _nodeService.IsConnected;
-            _hubWindow.NodeIsPaired = _nodeService.IsPaired;
-            _hubWindow.NodeIsPendingApproval = _nodeService.IsPendingApproval;
-            _hubWindow.NodeShortDeviceId = _nodeService.ShortDeviceId;
-            _hubWindow.NodeFullDeviceId = _nodeService.FullDeviceId;
-        }
-
-        // Seed cached data into hub (also on re-show)
-        SeedHubCachedData();
-
-        if (navigateTo != null)
-        {
-            _hubWindow.NavigateTo(navigateTo);
-        }
-        if (activate)
-        {
-            _hubWindow.Activate();
-        }
-        else
-        {
-            // Show without stealing focus — used by right-click on the
-            // tray icon where the popup needs to remain the foreground
-            // window (popups light-dismiss if focus moves away).
-            // If the Hub was minimized, restore it first so it actually
-            // becomes visible behind the popup; otherwise Show(false)
-            // is a no-op on a minimized window.
-            try
-            {
-                if (_hubWindow.AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter op
-                    && op.State == Microsoft.UI.Windowing.OverlappedPresenterState.Minimized)
-                {
-                    op.Restore(activateWindow: false);
-                }
-                _hubWindow.AppWindow.Show(activateWindow: false);
-            }
-            catch { /* swallow */ }
-        }
-    }
-
-    private void SeedHubCachedData()
-    {
-        if (_hubWindow == null) return;
-        // Agent events need explicit seeding since they use append semantics
-        if (_appModel.AgentEvents.Count > 0) _hubWindow.SeedAgentEvents(_appModel.AgentEvents);
-    }
-
-    private void ShowSettings()
-    {
-        ShowHub("settings");
-    }
+        => _windowManager?.ShowHub(navigateTo, activate);
 
     private void OnSettingsCommandCenterRequested(object? sender, EventArgs e)
     {
-        ShowStatusDetail();
+        _windowManager?.ShowStatusDetail();
     }
 
     private void OnSettingsSaved(object? sender, EventArgs e)
@@ -2253,11 +1434,7 @@ public partial class App : Application
                 UpdateTrayIcon();
 
                 // Reset chat window — it has a stale URL/token
-                if (_chatWindow != null)
-                {
-                    _chatWindow.ForceClose();
-                    _chatWindow = null;
-                }
+                _windowManager?.ResetChatWindow();
 
                 _ = _connectionManager?.ReconnectAsync();
                 break;
@@ -2292,149 +1469,12 @@ public partial class App : Application
         AutoStartManager.SetAutoStart(_settings.AutoStart);
 
         // Keep hub window in sync
-        if (_hubWindow != null && !_hubWindow.IsClosed)
+        var hubWindow = _windowManager?.HubWindow;
+        if (hubWindow != null && !hubWindow.IsClosed)
         {
-            _hubWindow.Settings = _settings;
-            _hubWindow.GatewayClient = _connectionManager?.OperatorClient;
-            _hubWindow.CurrentStatus = _appModel.Status;
-        }
-    }
-
-    private void ShowWebChat()
-    {
-        if (_settings == null) return;
-        if (!TryResolveChatCredentials(out _, out _, out _, out var isBootstrapToken))
-        {
-            ShowConnectionSettingsForPairingIssue(
-                "Chat",
-                "Gateway URL or credential is not configured");
-            return;
-        }
-
-        if (isBootstrapToken)
-        {
-            ShowConnectionSettingsForPairingIssue(
-                "Chat",
-                "Gateway pairing is not complete");
-            return;
-        }
-
-        ShowHub("chat");
-    }
-
-    private void ShowQuickSend(string? prefillMessage = null)
-    {
-        if (_connectionManager?.OperatorClient == null)
-        {
-            Logger.Warn("QuickSend blocked: gateway client not initialized");
-            return;
-        }
-
-        try
-        {
-            // Keep a strong reference to the window; otherwise the dialog can be GC'd
-            // and appear to not open (especially when triggered from a hotkey).
-            if (_quickSendDialog != null)
-            {
-                // If caller wants a prefill, re-create to apply it.
-                if (!string.IsNullOrEmpty(prefillMessage))
-                {
-                    try { _quickSendDialog.Close(); } catch { }
-                    _quickSendDialog = null;
-                }
-                else
-                {
-                    Logger.Info("QuickSend dialog already open; activating");
-                    _quickSendDialog.ShowAsync();
-                    return;
-                }
-            }
-
-            Logger.Info("Showing QuickSend dialog");
-            // Bug #3: pass a Func that resolves the live OperatorClient on
-            // every Send so post-pair / restart / reinit swaps are observed.
-            var dialog = new QuickSendDialog(() => _connectionManager?.OperatorClient as OpenClawGatewayClient, prefillMessage);
-            dialog.Closed += (s, e) =>
-            {
-                if (ReferenceEquals(_quickSendDialog, dialog))
-                {
-                    _quickSendDialog = null;
-                }
-            };
-            _quickSendDialog = dialog;
-            dialog.ShowAsync();
-        }
-        catch (Exception ex)
-        {
-            Logger.Error($"Failed to show QuickSend dialog: {ex.Message}");
-        }
-    }
-
-    private void ShowStatusDetail()
-    {
-        ShowHub("general");
-    }
-
-    private void ShowConnectionStatusWindow()
-    {
-        if (_connectionStatusWindow != null && !_connectionStatusWindow.IsClosed)
-        {
-            _connectionStatusWindow.Activate();
-            return;
-        }
-        _connectionStatusWindow = new ConnectionStatusWindow(
-            _connectionManager!.Diagnostics,
-            _gatewayRegistry,
-            _connectionManager);
-        _connectionStatusWindow.Activate();
-    }
-
-    private void RestartSshTunnel()
-    {
-        if (_settings?.UseSshTunnel != true)
-        {
-            _toastService?.ShowToast(new ToastContentBuilder()
-                .AddText("SSH tunnel")
-                .AddText("Managed SSH tunnel mode is not enabled."));
-            return;
-        }
-
-        try
-        {
-            Logger.Info("Restarting managed SSH tunnel from Command Center");
-            DiagnosticsJsonlService.Write("tunnel.restart_requested", new
-            {
-                localEndpoint = _settings.SshTunnelLocalPort > 0 ? $"127.0.0.1:{_settings.SshTunnelLocalPort}" : null,
-                remotePort = _settings.SshTunnelRemotePort
-            });
-
-            _sshTunnelService?.Stop();
-            // Status is updated by OnManagerStateChanged when reconnect completes.
-            UpdateTrayIcon();
-
-            if (!EnsureSshTunnelConfigured())
-            {
-                UpdateStatusDetailWindow();
-                _toastService?.ShowToast(new ToastContentBuilder()
-                    .AddText("SSH tunnel restart failed")
-                    .AddText(_sshTunnelService?.LastError ?? "Check SSH tunnel settings and logs."));
-                return;
-            }
-
-            _ = _connectionManager?.ReconnectAsync();
-
-            UpdateStatusDetailWindow();
-            _toastService?.ShowToast(new ToastContentBuilder()
-                .AddText("SSH tunnel")
-                .AddText("Restarted; reconnecting to gateway."));
-        }
-        catch (Exception ex)
-        {
-            Logger.Error($"SSH tunnel restart request failed: {ex.Message}");
-            DiagnosticsJsonlService.Write("tunnel.restart_request_failed", new { ex.Message });
-            _toastService?.ShowToast(new ToastContentBuilder()
-                .AddText("SSH tunnel restart failed")
-                .AddText(ex.Message));
+            hubWindow.Settings = _settings;
+            hubWindow.GatewayClient = _connectionManager?.OperatorClient;
+            hubWindow.CurrentStatus = _appModel.Status;
         }
     }
 
@@ -2453,80 +1493,8 @@ public partial class App : Application
 
     private void UpdateStatusDetailWindow()
     {
-        // Status changes are observed by HubWindow via AppModel.PropertyChanged.
+        // Status changes are observed by HubWindow via AppState.PropertyChanged.
         // This method is kept as a placeholder for any future non-hub status detail updates.
-    }
-
-    private void ShowNotificationHistory()
-    {
-        ShowActivityStream("notification");
-    }
-
-    private void ShowActivityStream(string? filter = null)
-    {
-        ShowHub("activity");
-        _hubWindow?.SetActivityFilter(filter);
-    }
-
-    private OnboardingWindow? _onboardingWindow;
-
-    private async Task ShowOnboardingAsync()
-    {
-        if (_settings == null) return;
-
-        if (_onboardingWindow != null)
-        {
-            try { _onboardingWindow.Activate(); return; } catch { _onboardingWindow = null; }
-        }
-
-        _onboardingWindow = new OnboardingWindow(_settings, IdentityDataPath);
-        _onboardingWindow.OnboardingCompleted += (s, e) =>
-        {
-            Logger.Info("Onboarding completed");
-            _onboardingWindow = null;
-
-            // If the persistent client was already initialized during onboarding, keep it
-            if (_connectionManager?.OperatorClient is OpenClawGatewayClient { IsConnectedToGateway: true })
-            {
-                Logger.Info("Gateway client already connected from onboarding — keeping");
-                return;
-            }
-
-            // Otherwise reinitialize with saved settings
-            _ = _connectionManager?.ReconnectAsync();
-
-            // Keep hub window in sync with new client
-            if (_hubWindow != null && !_hubWindow.IsClosed)
-            {
-                _hubWindow.Settings = _settings;
-                _hubWindow.GatewayClient = _connectionManager?.OperatorClient;
-                _hubWindow.CurrentStatus = _appModel.Status;
-            }
-        };
-        _onboardingWindow.Closed += (s, e) => _onboardingWindow = null;
-        _onboardingWindow.Activate();
-    }
-
-    private void ShowSurfaceImprovementsTipIfNeeded()
-    {
-        if (_settings == null || _settings.HasSeenActivityStreamTip) return;
-
-        _settings.HasSeenActivityStreamTip = true;
-        _settings.Save();
-
-        try
-        {
-            _toastService?.ShowToast(new ToastContentBuilder()
-                .AddText(LocalizationHelper.GetString("Toast_ActivityStreamTip"))
-                .AddText(LocalizationHelper.GetString("Toast_ActivityStreamTipDetail"))
-                .AddButton(new ToastButton()
-                    .SetContent(LocalizationHelper.GetString("Toast_ActivityStreamTipButton"))
-                    .AddArgument("action", "open_activity")));
-        }
-        catch (Exception ex)
-        {
-            Logger.Warn($"Failed to show activity stream tip: {ex.Message}");
-        }
     }
 
     #endregion
@@ -2563,125 +1531,17 @@ public partial class App : Application
         return true;
     }
 
+    /// <summary>
+    /// Tuple adapter for TryResolveChatCredentials, used by WindowManager.
+    /// </summary>
+    private (bool ok, string url, string token, string source, bool isBootstrap) ResolveChatCredentialsTuple()
+    {
+        if (TryResolveChatCredentials(out var url, out var token, out var source, out var isBootstrap))
+            return (true, url, token, source, isBootstrap);
+        return (false, string.Empty, string.Empty, "none", false);
+    }
+
     #region Actions
-
-    private void OpenDashboard(string? path = null)
-    {
-        if (_settings == null) return;
-        if (!EnsureSshTunnelConfigured()) return;
-        
-        var baseUrl = _settings.GetEffectiveGatewayUrl()
-            .Replace("ws://", "http://")
-            .Replace("wss://", "https://")
-            .TrimEnd('/');
-
-        var url = string.IsNullOrEmpty(path)
-            ? baseUrl
-            : $"{baseUrl}/{path.TrimStart('/')}";
-
-        var activeToken = _gatewayRegistry?.GetActive()?.SharedGatewayToken;
-        if (!string.IsNullOrEmpty(activeToken))
-        {
-            var separator = url.Contains('?') ? "&" : "?";
-            url = $"{url}{separator}token={Uri.EscapeDataString(activeToken)}";
-        }
-
-        try
-        {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            Logger.Error($"Failed to open dashboard: {ex.Message}");
-        }
-    }
-
-    private async void ToggleChannel(string channelName)
-    {
-        var client = _connectionManager?.OperatorClient;
-        if (client == null) return;
-
-        var channel = _appModel.Channels.FirstOrDefault(c => c.Name == channelName);
-        if (channel == null) return;
-
-        try
-        {
-            var isRunning = ChannelHealth.IsHealthyStatus(channel.Status);
-            if (isRunning)
-            {
-                await client.StopChannelAsync(channelName);
-                AddRecentActivity($"Stopped channel: {channelName}", category: "channel", dashboardPath: "settings");
-            }
-            else
-            {
-                await client.StartChannelAsync(channelName);
-                AddRecentActivity($"Started channel: {channelName}", category: "channel", dashboardPath: "settings");
-            }
-             
-            // Refresh health
-            await RunHealthCheckAsync();
-        }
-        catch (Exception ex)
-        {
-            AddRecentActivity($"Channel toggle failed: {channelName}", category: "channel", details: ex.Message);
-            Logger.Error($"Failed to toggle channel: {ex.Message}");
-        }
-    }
-
-    private void ToggleAutoStart()
-    {
-        if (_settings == null) return;
-        _settings.AutoStart = !_settings.AutoStart;
-        _settings.Save();
-        AutoStartManager.SetAutoStart(_settings.AutoStart);
-    }
-
-    private void OpenLogFile()
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo(Logger.LogFilePath) { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            Logger.Error($"Failed to open log file: {ex.Message}");
-        }
-    }
-
-    private void OpenLogFolder()
-    {
-        OpenFolder(Path.GetDirectoryName(Logger.LogFilePath), "logs");
-    }
-
-    private void OpenConfigFolder()
-    {
-        OpenFolder(SettingsManager.SettingsDirectoryPath, "config");
-    }
-
-    private void OpenDiagnosticsFolder()
-    {
-        OpenFolder(Path.GetDirectoryName(DiagnosticsJsonlService.FilePath), "diagnostics");
-    }
-
-    private static void OpenFolder(string? folderPath, string label)
-    {
-        if (string.IsNullOrWhiteSpace(folderPath))
-        {
-            Logger.Warn($"Failed to open {label} folder: path is not configured");
-            return;
-        }
-
-        try
-        {
-            Directory.CreateDirectory(folderPath);
-            Process.Start(new ProcessStartInfo(folderPath) { UseShellExecute = true });
-            Logger.Info($"Opened {label} folder: {folderPath}");
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
-        {
-            Logger.Warn($"Failed to open {label} folder {folderPath}: {ex.Message}");
-        }
-    }
 
     private void OnGlobalHotkeyPressed(object? sender, EventArgs e)
     {
@@ -2691,7 +1551,7 @@ public partial class App : Application
             return;
         }
 
-        var enqueued = _dispatcherQueue.TryEnqueue(() => ShowQuickSend());
+        var enqueued = _dispatcherQueue.TryEnqueue(() => _windowManager?.ShowQuickSend());
         if (!enqueued)
         {
             Logger.Warn("Hotkey pressed but failed to enqueue QuickSend on UI thread");
@@ -2701,7 +1561,7 @@ public partial class App : Application
     private void OnVoiceHotkeyPressed(object? sender, EventArgs e)
     {
         if (_dispatcherQueue == null) return;
-        _dispatcherQueue.TryEnqueue(() => ShowVoiceOverlay());
+        _dispatcherQueue.TryEnqueue(() => _windowManager?.ShowVoiceOverlay());
     }
 
     #endregion
@@ -2893,15 +1753,15 @@ public partial class App : Application
     {
         DeepLinkHandler.Handle(uri, new DeepLinkActions
         {
-            OpenSettings = ShowSettings,
-            OpenSetup = () => _ = ShowOnboardingAsync(),
+            OpenSettings = () => _windowManager?.ShowSettings(),
+            OpenSetup = () => _ = _windowManager?.ShowOnboardingAsync(),
             RunHealthCheck = () => RunHealthCheckAsync(userInitiated: true),
             CheckForUpdates = CheckForUpdatesUserInitiatedAsync,
-            OpenLogFile = OpenLogFile,
-            OpenLogFolder = OpenLogFolder,
-            OpenConfigFolder = OpenConfigFolder,
-            OpenDiagnosticsFolder = OpenDiagnosticsFolder,
-            OpenConnectionStatus = ShowConnectionStatusWindow,
+            OpenLogFile = () => _actionDispatcher?.OpenLogFile(),
+            OpenLogFolder = () => _actionDispatcher?.OpenLogFolder(),
+            OpenConfigFolder = () => _actionDispatcher?.OpenConfigFolder(),
+            OpenDiagnosticsFolder = () => _actionDispatcher?.OpenDiagnosticsFolder(),
+            OpenConnectionStatus = () => _windowManager?.ShowConnectionStatusWindow(),
             CopySupportContext = () => _diagnosticsCopy?.CopySupportContext(),
             CopyDebugBundle = () => _diagnosticsCopy?.CopyDebugBundle(),
             CopyBrowserSetupGuidance = () => _diagnosticsCopy?.CopyBrowserSetupGuidance(),
@@ -2911,16 +1771,16 @@ public partial class App : Application
             CopyChannelSummary = () => _diagnosticsCopy?.CopyChannelSummary(),
             CopyActivitySummary = () => _diagnosticsCopy?.CopyActivitySummary(),
             CopyExtensibilitySummary = () => _diagnosticsCopy?.CopyExtensibilitySummary(),
-            RestartSshTunnel = RestartSshTunnel,
-            OpenChat = ShowWebChat,
-            OpenCommandCenter = ShowStatusDetail,
+            RestartSshTunnel = () => _actionDispatcher?.Dispatch("restartsshtunnel"),
+            OpenChat = () => _windowManager?.ShowWebChat(),
+            OpenCommandCenter = () => _windowManager?.ShowStatusDetail(),
             OpenTrayMenu = ShowTrayMenuPopup,
-            OpenActivityStream = ShowActivityStream,
-            OpenNotificationHistory = ShowNotificationHistory,
-            OpenDashboard = OpenDashboard,
-            OpenQuickSend = ShowQuickSend,
-            OpenHub = (page) => ShowHub(page),
-            OpenVoice = () => ShowVoiceOverlay(),
+            OpenActivityStream = (f) => _windowManager?.ShowActivityStream(f),
+            OpenNotificationHistory = () => _windowManager?.ShowNotificationHistory(),
+            OpenDashboard = (path) => _actionDispatcher?.OpenDashboard(path),
+            OpenQuickSend = (msg) => _windowManager?.ShowQuickSend(msg),
+            OpenHub = (page) => _windowManager?.ShowHub(page),
+            OpenVoice = () => _windowManager?.ShowVoiceOverlay(),
             StopVoice = () => _ = StopVoiceAsync(),
             SendMessage = async (msg) =>
             {
@@ -3020,16 +1880,16 @@ public partial class App : Application
                         catch { }
                         break;
                     case "open_dashboard":
-                        OpenDashboard();
+                        _actionDispatcher?.OpenDashboard();
                         break;
                     case "open_settings":
-                        ShowSettings();
+                        _windowManager?.ShowSettings();
                         break;
                     case "open_chat":
-                        ShowWebChat();
+                        _windowManager?.ShowWebChat();
                         break;
                     case "open_activity":
-                        ShowActivityStream();
+                        _windowManager?.ShowActivityStream();
                         break;
                     case "copy_pairing_command" when arguments.TryGetValue("command", out var command):
                         CopyTextToClipboard(command);
@@ -3092,8 +1952,7 @@ public partial class App : Application
 
         SafeShutdownStep("standalone voice service", () =>
         {
-            _standaloneVoiceService?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            _standaloneVoiceService = null;
+            _windowManager?.DisposeStandaloneVoiceService();
         });
 
         SafeShutdownStep("ssh tunnel service", () =>
@@ -3103,11 +1962,10 @@ public partial class App : Application
         });
 
         // Close windows explicitly for deterministic shutdown tracing.
-        SafeShutdownStep("chat window", () => { _chatWindow?.ForceClose(); _chatWindow = null; });
+        SafeShutdownStep("chat window", () => _windowManager?.CloseChatWindow());
         SafeShutdownStep("tray menu window", () => CloseWindow(_trayMenuWindow));
         _trayMenuWindow = null;
-        SafeShutdownStep("quick send dialog", () => CloseWindow(_quickSendDialog));
-        _quickSendDialog = null;
+        SafeShutdownStep("quick send dialog", () => _windowManager?.CloseQuickSendDialog());
         SafeShutdownStep("keep alive window", () => CloseWindow(_keepAliveWindow));
         _keepAliveWindow = null;
 

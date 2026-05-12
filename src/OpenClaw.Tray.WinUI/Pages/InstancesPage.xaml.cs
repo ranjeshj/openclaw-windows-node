@@ -3,23 +3,26 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using OpenClaw.Shared;
-using OpenClawTray.Windows;
+using OpenClawTray.Services;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 
 namespace OpenClawTray.Pages;
 
 public sealed partial class InstancesPage : Page
 {
-    private HubWindow? _hub;
+    private AppState? _state;
 
     public InstancesPage() { InitializeComponent(); }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state)
     {
-        _hub = hub;
+        _state = state;
+        if (_state != null)
+            _state.PropertyChanged += OnStateChanged;
 
-        if (hub.CurrentStatus != ConnectionStatus.Connected)
+        if ((state?.Status ?? ConnectionStatus.Disconnected) != ConnectionStatus.Connected)
         {
             ConnectionWarning.Visibility = Visibility.Visible;
             EmptyState.Visibility = Visibility.Visible;
@@ -29,10 +32,16 @@ public sealed partial class InstancesPage : Page
         ConnectionWarning.Visibility = Visibility.Collapsed;
 
         // Use presence data if available, fall back to empty
-        if (hub.LastPresence != null)
-            RenderPresence(hub.LastPresence);
+        if (state?.Presence != null)
+            RenderPresence(state.Presence);
         else
             EmptyState.Visibility = Visibility.Visible;
+    }
+
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AppState.Presence) && _state!.Presence != null)
+            UpdatePresenceData(_state.Presence);
     }
 
     public void UpdatePresenceData(PresenceEntry[] entries)
@@ -177,7 +186,7 @@ public sealed partial class InstancesPage : Page
 
     private void OnRefresh(object sender, RoutedEventArgs e)
     {
-        if (_hub?.LastPresence != null)
-            RenderPresence(_hub.LastPresence);
+        if (_state?.Presence != null)
+            RenderPresence(_state.Presence);
     }
 }

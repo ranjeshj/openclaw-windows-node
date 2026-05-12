@@ -1,7 +1,9 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using OpenClawTray.Windows;
+using OpenClaw.Shared;
+using OpenClawTray.Services;
 using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using WinDataTransfer = global::Windows.ApplicationModel.DataTransfer;
 
@@ -9,25 +11,37 @@ namespace OpenClawTray.Pages;
 
 public sealed partial class AboutPage : Page
 {
-    private HubWindow? _hub;
+    private AppState? _state;
+    private SettingsManager? _settings;
+    private Action<string>? _dispatch;
 
     public AboutPage()
     {
         InitializeComponent();
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state, SettingsManager? settings, Action<string>? dispatch)
     {
-        _hub = hub;
+        _state = state;
+        _settings = settings;
+        _dispatch = dispatch;
+        if (_state != null)
+            _state.PropertyChanged += OnStateChanged;
         TryLoadGatewayInfo();
+    }
+
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AppState.GatewaySelf))
+            RefreshGatewayInfo();
     }
 
     public void RefreshGatewayInfo() => TryLoadGatewayInfo();
 
     private void TryLoadGatewayInfo()
     {
-        var self = _hub?.LastGatewaySelf;
-        if (_hub?.CurrentStatus == OpenClaw.Shared.ConnectionStatus.Connected && self != null)
+        var self = _state?.GatewaySelf;
+        if ((_state?.Status ?? ConnectionStatus.Disconnected) == ConnectionStatus.Connected && self != null)
         {
             GatewayVersionText.Text = self.VersionText;
             GatewayModelText.Text = self.Protocol.HasValue ? $"protocol v{self.Protocol}" : "unknown";
@@ -80,8 +94,8 @@ public sealed partial class AboutPage : Page
             var context = $"OpenClaw Hub v0.1.0\n"
                 + $"OS: {Environment.OSVersion}\n"
                 + $"Runtime: {System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription}\n"
-                + $"Connection: {_hub?.CurrentStatus}\n"
-                + $"Gateway: {_hub?.Settings?.GetEffectiveGatewayUrl() ?? "n/a"}\n";
+                + $"Connection: {_state?.Status ?? ConnectionStatus.Disconnected}\n"
+                + $"Gateway: {_settings?.GetEffectiveGatewayUrl() ?? "n/a"}\n";
 
             var dataPackage = new WinDataTransfer.DataPackage();
             dataPackage.SetText(context);
@@ -95,7 +109,7 @@ public sealed partial class AboutPage : Page
 
     private void OnCheckUpdatesClick(object sender, RoutedEventArgs e)
     {
-        _hub?.CheckForUpdatesAction?.Invoke();
+        _dispatch?.Invoke("checkupdates");
     }
 
     private void OnDocumentationClick(object sender, RoutedEventArgs e)
@@ -124,6 +138,6 @@ public sealed partial class AboutPage : Page
 
     private void OnDashboardClick(object sender, RoutedEventArgs e)
     {
-        _hub?.OpenDashboardAction?.Invoke(null);
+        _dispatch?.Invoke("dashboard");
     }
 }

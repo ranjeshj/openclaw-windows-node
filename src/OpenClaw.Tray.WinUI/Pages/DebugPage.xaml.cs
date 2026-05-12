@@ -1,7 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using OpenClaw.Shared;
-using OpenClawTray.Windows;
+using OpenClawTray.Services;
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -13,7 +13,9 @@ namespace OpenClawTray.Pages;
 
 public sealed partial class DebugPage : Page
 {
-    private HubWindow? _hub;
+    private AppState? _state;
+    private SettingsManager? _settings;
+    private Action<string>? _dispatch;
 
     private static readonly string LocalAppData = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OpenClawTray");
@@ -24,9 +26,11 @@ public sealed partial class DebugPage : Page
 
     public DebugPage() { InitializeComponent(); }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state, SettingsManager? settings, Action<string>? dispatch)
     {
-        _hub = hub;
+        _state = state;
+        _settings = settings;
+        _dispatch = dispatch;
         LoadLog();
         LoadConnectionStatus();
         LoadDeviceIdentity();
@@ -74,9 +78,10 @@ public sealed partial class DebugPage : Page
 
     private void LoadConnectionStatus()
     {
-        if (_hub == null) return;
+        if (_state == null && _settings == null) return;
 
-        var statusText = _hub.CurrentStatus switch
+        var status = _state?.Status ?? ConnectionStatus.Disconnected;
+        var statusText = status switch
         {
             ConnectionStatus.Connected => "🟢 Connected",
             ConnectionStatus.Connecting => "🟡 Connecting",
@@ -86,8 +91,8 @@ public sealed partial class DebugPage : Page
         };
         OperatorStatusText.Text = statusText;
 
-        GatewayUrlText.Text = _hub.Settings?.GetEffectiveGatewayUrl() ?? "—";
-        NodeModeText.Text = _hub.Settings?.EnableNodeMode == true ? "Enabled" : "Disabled";
+        GatewayUrlText.Text = _settings?.GetEffectiveGatewayUrl() ?? "—";
+        NodeModeText.Text = _settings?.EnableNodeMode == true ? "Enabled" : "Disabled";
     }
 
     // ── Device Identity ──────────────────────────────────────────────
@@ -172,7 +177,7 @@ public sealed partial class DebugPage : Page
 
     private void OnOpenConnectionStatus(object sender, RoutedEventArgs e)
     {
-        _hub?.OpenConnectionStatusAction?.Invoke();
+        _dispatch?.Invoke("connectionstatus");
     }
 
     private void OnCopySupportContext(object sender, RoutedEventArgs e)
@@ -204,6 +209,6 @@ public sealed partial class DebugPage : Page
 
     private void OnRelaunchOnboarding(object sender, RoutedEventArgs e)
     {
-        _hub?.OpenSetupAction?.Invoke();
+        _dispatch?.Invoke("setup");
     }
 }

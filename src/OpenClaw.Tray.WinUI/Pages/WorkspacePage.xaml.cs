@@ -1,40 +1,60 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using OpenClaw.Shared;
-using OpenClawTray.Windows;
+using OpenClawTray.Services;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Text.Json;
 
 namespace OpenClawTray.Pages;
 
 public sealed partial class WorkspacePage : Page
 {
-    private HubWindow? _hub;
+    private IOperatorGatewayClient? _client;
+    private AppState? _state;
     private readonly Dictionary<string, TabViewItem> _fileTabs = new(StringComparer.OrdinalIgnoreCase);
     private bool _tabsPopulated;
+    private string _agentId = "main";
 
-    private string AgentId => _hub?.CurrentAgentId ?? "main";
+    private string AgentId => _agentId;
 
     public WorkspacePage()
     {
         InitializeComponent();
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state, IOperatorGatewayClient? client, string agentId)
     {
-        _hub = hub;
-        if (hub.GatewayClient != null && hub.CurrentStatus == ConnectionStatus.Connected)
+        _client = client;
+        _state = state;
+        _agentId = agentId;
+        if (_state != null)
+            _state.PropertyChanged += OnStateChanged;
+        if (client != null && (state?.Status ?? ConnectionStatus.Disconnected) == ConnectionStatus.Connected)
         {
             FallbackInfoBar.IsOpen = false;
             LoadingRing.IsActive = true;
             ClearTabs();
-            _ = hub.GatewayClient.RequestAgentFilesListAsync(AgentId);
+            _ = client.RequestAgentFilesListAsync(AgentId);
         }
         else
         {
             FallbackInfoBar.IsOpen = true;
             FallbackInfoBar.Message = "Connect to gateway to view workspace files.";
+        }
+    }
+
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(AppState.AgentFilesList):
+                if (_state!.AgentFilesList.HasValue) UpdateAgentFilesList(_state.AgentFilesList.Value);
+                break;
+            case nameof(AppState.AgentFileContent):
+                if (_state!.AgentFileContent.HasValue) UpdateAgentFileContent(_state.AgentFileContent.Value);
+                break;
         }
     }
 
@@ -63,8 +83,8 @@ public sealed partial class WorkspacePage : Page
                 {
                     AddFileTab(name, size);
                     // Fetch all contents upfront
-                    if (_hub?.GatewayClient != null)
-                        _ = _hub.GatewayClient.RequestAgentFileGetAsync(AgentId, name);
+                if (_client != null)
+                        _ = _client.RequestAgentFileGetAsync(AgentId, name);
                 }
             }
         }
@@ -154,20 +174,20 @@ public sealed partial class WorkspacePage : Page
     {
         // Lazy load on tab select if content is still placeholder
         if (FileTabs.SelectedItem is TabViewItem tab && tab.Tag is string fileName &&
-            tab.Content is StackPanel && _hub?.GatewayClient != null)
+            tab.Content is StackPanel && _client != null)
         {
-            _ = _hub.GatewayClient.RequestAgentFileGetAsync(AgentId, fileName);
+            _ = _client.RequestAgentFileGetAsync(AgentId, fileName);
         }
     }
 
     private void RefreshButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_hub?.GatewayClient != null)
+        if (_client != null)
         {
             LoadingRing.IsActive = true;
             FallbackInfoBar.IsOpen = false;
             ClearTabs();
-            _ = _hub.GatewayClient.RequestAgentFilesListAsync(AgentId);
+            _ = _client.RequestAgentFilesListAsync(AgentId);
         }
     }
 

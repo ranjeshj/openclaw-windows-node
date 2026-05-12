@@ -1,38 +1,58 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using OpenClaw.Shared;
-using OpenClawTray.Windows;
+using OpenClawTray.Services;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 
 namespace OpenClawTray.Pages;
 
 public sealed partial class SessionsPage : Page
 {
-    private HubWindow? _hub;
+    private IOperatorGatewayClient? _client;
+    private AppState? _state;
 
     public SessionsPage()
     {
         InitializeComponent();
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state, IOperatorGatewayClient? client)
     {
-        _hub = hub;
-        if (hub.GatewayClient != null)
+        _client = client;
+        _state = state;
+        if (_state != null)
+            _state.PropertyChanged += OnStateChanged;
+        if (client != null)
         {
             ConnectionWarning.Visibility = Visibility.Collapsed;
-            if (hub.LastSessions != null)
-                UpdateSessions(hub.LastSessions);
+            if (state?.Sessions != null)
+                UpdateSessions(state.Sessions);
             else
                 SessionListView.ItemsSource = null;
-            _ = hub.GatewayClient.RequestSessionsAsync();
-            _ = hub.GatewayClient.RequestModelsListAsync();
+            _ = client.RequestSessionsAsync();
+            _ = client.RequestModelsListAsync();
+            if (_state?.ModelsList != null) UpdateModelsList(_state.ModelsList);
         }
         else
         {
             ConnectionWarning.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(AppState.Sessions):
+                UpdateSessions(_state!.Sessions);
+                break;
+            case nameof(AppState.ModelsList):
+                if (_state!.ModelsList != null)
+                    UpdateModelsList(_state.ModelsList);
+                break;
         }
     }
 
@@ -64,9 +84,8 @@ public sealed partial class SessionsPage : Page
     {
         if (sender is Button btn && btn.Tag is string key)
         {
-            var client = _hub?.GatewayClient;
-            if (client == null) { ShowNotConnected(); return; }
-            try { await client.ResetSessionAsync(key); }
+            if (_client == null) { ShowNotConnected(); return; }
+            try { await _client.ResetSessionAsync(key); }
             catch (Exception) { /* reset failed silently */ }
         }
     }
@@ -75,9 +94,8 @@ public sealed partial class SessionsPage : Page
     {
         if (sender is Button btn && btn.Tag is string key)
         {
-            var client = _hub?.GatewayClient;
-            if (client == null) { ShowNotConnected(); return; }
-            try { await client.DeleteSessionAsync(key); }
+            if (_client == null) { ShowNotConnected(); return; }
+            try { await _client.DeleteSessionAsync(key); }
             catch (Exception) { /* delete failed silently */ }
         }
     }
@@ -86,19 +104,17 @@ public sealed partial class SessionsPage : Page
     {
         if (sender is Button btn && btn.Tag is string key)
         {
-            var client = _hub?.GatewayClient;
-            if (client == null) { ShowNotConnected(); return; }
-            try { await client.CompactSessionAsync(key); }
+            if (_client == null) { ShowNotConnected(); return; }
+            try { await _client.CompactSessionAsync(key); }
             catch (Exception) { /* compact failed silently */ }
         }
     }
 
     private void OnRefresh(object sender, RoutedEventArgs e)
     {
-        var client = _hub?.GatewayClient;
-        if (client != null)
+        if (_client != null)
         {
-            _ = client.RequestSessionsAsync();
+            _ = _client.RequestSessionsAsync();
         }
         RefreshButton.Content = "Refreshing...";
         var timer = DispatcherQueue.CreateTimer();

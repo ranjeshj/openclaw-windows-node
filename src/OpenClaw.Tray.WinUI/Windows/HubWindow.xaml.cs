@@ -41,13 +41,7 @@ public sealed partial class HubWindow : WindowEx
 
     // Legacy compatibility alias
     public string SelectedAgentId => _currentAgentId;
-    public Action<string?>? OpenDashboardAction { get; set; }
-    public Action? CheckForUpdatesAction { get; set; }
-    public Action? ConnectAction { get; set; }
-    public Action? DisconnectAction { get; set; }
-    public Action? ReconnectAction { get; set; }
-    public Action? OpenSetupAction { get; set; }
-    public Action? OpenConnectionStatusAction { get; set; }
+    public Action<string>? DispatchAction { get; set; }
     public OpenClawTray.Services.Connection.IGatewayConnectionManager? ConnectionManager { get; set; }
     public OpenClawTray.Services.Connection.GatewayRegistry? GatewayRegistry { get; set; }
 
@@ -60,8 +54,8 @@ public sealed partial class HubWindow : WindowEx
     public VoiceService? VoiceServiceInstance { get; set; }
     public string? NodeFullDeviceId { get; set; }
 
-    private AppModel? _appModel;
-    internal AppModel? AppModel
+    private AppState? _appModel;
+    internal AppState? AppModel
     {
         get => _appModel;
         set
@@ -80,16 +74,16 @@ public sealed partial class HubWindow : WindowEx
         }
     }
 
-    // Cached gateway data — pages read these on navigation
-    public SessionInfo[]? LastSessions { get; private set; }
-    public ChannelHealth[]? LastChannels { get; private set; }
-    public GatewayUsageInfo? LastUsage { get; private set; }
-    public GatewayCostUsageInfo? LastUsageCost { get; private set; }
-    public GatewayUsageStatusInfo? LastUsageStatus { get; private set; }
-    public GatewayNodeInfo[]? LastNodes { get; private set; }
+    // Gateway data — read-through to AppState (single source of truth)
+    public SessionInfo[]? LastSessions => _appModel?.Sessions;
+    public ChannelHealth[]? LastChannels => _appModel?.Channels;
+    public GatewayUsageInfo? LastUsage => _appModel?.Usage;
+    public GatewayCostUsageInfo? LastUsageCost => _appModel?.UsageCost;
+    public GatewayUsageStatusInfo? LastUsageStatus => _appModel?.UsageStatus;
+    public GatewayNodeInfo[]? LastNodes => _appModel?.Nodes;
 
-    public System.Text.Json.JsonElement? LastConfig { get; private set; }
-    public System.Text.Json.JsonElement? LastConfigSchema { get; private set; }
+    public System.Text.Json.JsonElement? LastConfig => _appModel?.Config;
+    public System.Text.Json.JsonElement? LastConfigSchema => _appModel?.ConfigSchema;
 
     // Event for settings saved (App.xaml.cs subscribes)
     public event EventHandler? SettingsSaved;
@@ -187,14 +181,6 @@ public sealed partial class HubWindow : WindowEx
                 if (status == ConnectionStatus.Disconnected)
                     _lastGatewaySelf = null;
                 UpdateTitleBarStatus(status);
-                if (ContentFrame?.Content is HomePage homePage)
-                {
-                    homePage.UpdateConnectionStatus(status, Settings?.GetEffectiveGatewayUrl());
-                }
-                if (ContentFrame?.Content is ConnectionPage connectionPage)
-                {
-                    connectionPage.UpdateStatus(status);
-                }
             });
         }
         catch { }
@@ -226,157 +212,6 @@ public sealed partial class HubWindow : WindowEx
 
     private GatewaySelfInfo? _lastGatewaySelf;
     public GatewaySelfInfo? LastGatewaySelf => _lastGatewaySelf;
-
-    public void UpdateGatewaySelf(GatewaySelfInfo self)
-    {
-        _lastGatewaySelf = self;
-        try
-        {
-            DispatcherQueue?.TryEnqueue(() =>
-            {
-                if (IsClosed) return;
-                UpdateTitleBarStatus(CurrentStatus);
-                if (ContentFrame?.Content is AboutPage about)
-                    about.RefreshGatewayInfo();
-            });
-        }
-        catch { }
-    }
-
-    public void UpdateSessions(SessionInfo[] sessions)
-    {
-        LastSessions = sessions;
-        if (IsClosed) return;
-        DispatcherQueue?.TryEnqueue(() =>
-        {
-            if (ContentFrame?.Content is SessionsPage sp) sp.UpdateSessions(sessions);
-            else if (ContentFrame?.Content is ConversationsPage convos) convos.UpdateSessions(sessions);
-            else if (ContentFrame?.Content is HomePage home) home.UpdateSessions(sessions);
-        });
-    }
-
-    public void UpdateChannelHealth(ChannelHealth[] channels)
-    {
-        LastChannels = channels;
-        if (IsClosed) return;
-        DispatcherQueue?.TryEnqueue(() =>
-        {
-            if (ContentFrame?.Content is ChannelsPage cp) cp.UpdateChannels(channels);
-        });
-    }
-
-    public void UpdateUsage(GatewayUsageInfo usage)
-    {
-        LastUsage = usage;
-        if (IsClosed) return;
-        DispatcherQueue?.TryEnqueue(() =>
-        {
-            if (ContentFrame?.Content is UsagePage up) up.UpdateUsage(usage);
-        });
-    }
-
-    public void UpdateUsageCost(GatewayCostUsageInfo cost)
-    {
-        LastUsageCost = cost;
-        if (IsClosed) return;
-        DispatcherQueue?.TryEnqueue(() =>
-        {
-            if (ContentFrame?.Content is UsagePage up) up.UpdateUsageCost(cost);
-        });
-    }
-
-    public void UpdateUsageStatus(GatewayUsageStatusInfo status)
-    {
-        LastUsageStatus = status;
-        if (IsClosed) return;
-        DispatcherQueue?.TryEnqueue(() =>
-        {
-            if (ContentFrame?.Content is UsagePage up) up.UpdateUsageStatus(status);
-        });
-    }
-
-    public void UpdateNodes(GatewayNodeInfo[] nodes)
-    {
-        LastNodes = nodes;
-        if (IsClosed) return;
-        DispatcherQueue?.TryEnqueue(() =>
-        {
-            if (ContentFrame?.Content is NodesPage np) np.UpdateNodes(nodes);
-            else if (ContentFrame?.Content is HomePage home) home.UpdateNodes(nodes);
-        });
-    }
-
-    public void UpdateCronList(System.Text.Json.JsonElement data)
-    {
-        try
-        {
-            DispatcherQueue?.TryEnqueue(() =>
-            {
-                if (IsClosed) return;
-                if (ContentFrame?.Content is CronPage cp) cp.UpdateFromGateway(data);
-            });
-        }
-        catch { }
-    }
-
-    public void UpdateCronStatus(System.Text.Json.JsonElement data) => UpdateCronList(data);
-
-    public void UpdateConfig(System.Text.Json.JsonElement config)
-    {
-        var snapshot = config.Clone();
-        LastConfig = snapshot;
-        if (IsClosed) return;
-        DispatcherQueue?.TryEnqueue(() =>
-        {
-            if (ContentFrame?.Content is ConfigPage cp) cp.UpdateConfig(snapshot);
-            else if (ContentFrame?.Content is BindingsPage bp) bp.UpdateConfig(snapshot);
-        });
-    }
-
-    public void UpdateConfigSchema(System.Text.Json.JsonElement schema)
-    {
-        var snapshot = schema.Clone();
-        LastConfigSchema = snapshot;
-        if (IsClosed) return;
-        try
-        {
-            DispatcherQueue?.TryEnqueue(() =>
-            {
-                if (IsClosed) return;
-                if (ContentFrame?.Content is ConfigPage cp) cp.UpdateConfigSchema(snapshot);
-            });
-        }
-        catch { }
-    }
-
-    public void UpdateSkillsStatus(System.Text.Json.JsonElement data)
-    {
-        try
-        {
-            DispatcherQueue?.TryEnqueue(() =>
-            {
-                if (IsClosed) return;
-                if (ContentFrame?.Content is SkillsPage sp) sp.UpdateFromGateway(data);
-            });
-        }
-        catch { }
-    }
-
-    public void UpdateAgentsList(System.Text.Json.JsonElement data)
-    {
-        LastAgentsData = data;
-        try
-        {
-            DispatcherQueue?.TryEnqueue(() =>
-            {
-                if (IsClosed) return;
-                // Rebuild nav sidebar agent items
-                RebuildAgentNavItems(data);
-                if (ContentFrame?.Content is HomePage home) home.UpdateAgentsList(data);
-            });
-        }
-        catch { }
-    }
 
     private void RebuildAgentNavItems(System.Text.Json.JsonElement data)
     {
@@ -420,32 +255,6 @@ public sealed partial class HubWindow : WindowEx
         return ids;
     }
 
-    public void UpdateAgentFilesList(System.Text.Json.JsonElement data)
-    {
-        try
-        {
-            DispatcherQueue?.TryEnqueue(() =>
-            {
-                if (IsClosed) return;
-                if (ContentFrame?.Content is WorkspacePage wp) wp.UpdateAgentFilesList(data);
-            });
-        }
-        catch { }
-    }
-
-    public void UpdateAgentFileContent(System.Text.Json.JsonElement data)
-    {
-        try
-        {
-            DispatcherQueue?.TryEnqueue(() =>
-            {
-                if (IsClosed) return;
-                if (ContentFrame?.Content is WorkspacePage wp) wp.UpdateAgentFileContent(data);
-            });
-        }
-        catch { }
-    }
-
     // Agent events ring buffer (max 400, cached centrally)
     // All mutations happen on the UI thread via DispatcherQueue
     private const int MaxAgentEvents = 400;
@@ -482,87 +291,13 @@ public sealed partial class HubWindow : WindowEx
         });
     }
 
-    public void UpdateAgentEvent(AgentEventInfo evt)
-    {
-        try
-        {
-            DispatcherQueue?.TryEnqueue(() =>
-            {
-                if (IsClosed) return;
-                _agentEvents.Insert(0, evt);
-                if (_agentEvents.Count > MaxAgentEvents)
-                    _agentEvents.RemoveRange(MaxAgentEvents, _agentEvents.Count - MaxAgentEvents);
-                if (ContentFrame?.Content is AgentEventsPage agentEvents) agentEvents.AddEvent(evt);
-            });
-        }
-        catch { }
-    }
+    // Pairing data — read-through to AppState
+    public PairingListInfo? LastNodePairList => _appModel?.NodePairList;
+    public DevicePairingListInfo? LastDevicePairList => _appModel?.DevicePairList;
+    public ModelsListInfo? LastModelsList => _appModel?.ModelsList;
 
-    // Pairing data
-    public PairingListInfo? LastNodePairList { get; private set; }
-    public DevicePairingListInfo? LastDevicePairList { get; private set; }
-    public ModelsListInfo? LastModelsList { get; private set; }
-
-    public void UpdateNodePairList(PairingListInfo data)
-    {
-        LastNodePairList = data;
-        try
-        {
-            DispatcherQueue?.TryEnqueue(() =>
-            {
-                if (IsClosed) return;
-                if (ContentFrame?.Content is NodesPage np) np.UpdatePairingRequests(data);
-            });
-        }
-        catch { }
-    }
-
-    public void UpdateDevicePairList(DevicePairingListInfo data)
-    {
-        LastDevicePairList = data;
-        try
-        {
-            DispatcherQueue?.TryEnqueue(() =>
-            {
-                if (IsClosed) return;
-                if (ContentFrame?.Content is NodesPage np) np.UpdateDevicePairingRequests(data);
-                if (ContentFrame?.Content is ConnectionPage cp) cp.UpdateDevicePairingRequests(data);
-            });
-        }
-        catch { }
-    }
-
-    public void UpdateModelsList(ModelsListInfo data)
-    {
-        LastModelsList = data;
-        try
-        {
-            DispatcherQueue?.TryEnqueue(() =>
-            {
-                if (IsClosed) return;
-                if (ContentFrame?.Content is SessionsPage sp) sp.UpdateModelsList(data);
-            });
-        }
-        catch { }
-    }
-
-    public PresenceEntry[]? LastPresence { get; private set; }
-    public System.Text.Json.JsonElement? LastAgentsData { get; private set; }
-
-    public void UpdatePresence(PresenceEntry[] data)
-    {
-        LastPresence = data;
-        try
-        {
-            DispatcherQueue?.TryEnqueue(() =>
-            {
-                if (IsClosed) return;
-                if (ContentFrame?.Content is InstancesPage ip) ip.UpdatePresenceData(data);
-                if (ContentFrame?.Content is NodesPage np) np.UpdatePresence(data);
-            });
-        }
-        catch { }
-    }
+    public PresenceEntry[]? LastPresence => _appModel?.Presence;
+    public System.Text.Json.JsonElement? LastAgentsData => _appModel?.AgentsList;
 
     private void OnModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -574,116 +309,20 @@ public sealed partial class HubWindow : WindowEx
                 if (IsClosed || _appModel == null) return;
                 switch (e.PropertyName)
                 {
-                    case nameof(Services.AppModel.Status):
+                    case nameof(Services.AppState.Status):
                         CurrentStatus = _appModel.Status;
                         _cachedCommands = null;
                         if (_appModel.Status == ConnectionStatus.Disconnected)
                             _lastGatewaySelf = null;
                         UpdateTitleBarStatus(_appModel.Status);
-                        if (ContentFrame?.Content is HomePage homePage)
-                            homePage.UpdateConnectionStatus(_appModel.Status, Settings?.GetEffectiveGatewayUrl());
-                        if (ContentFrame?.Content is ConnectionPage connectionPage)
-                            connectionPage.UpdateStatus(_appModel.Status);
                         break;
-                    case nameof(Services.AppModel.GatewaySelf):
+                    case nameof(Services.AppState.GatewaySelf):
                         _lastGatewaySelf = _appModel.GatewaySelf;
                         UpdateTitleBarStatus(CurrentStatus);
-                        if (ContentFrame?.Content is AboutPage about)
-                            about.RefreshGatewayInfo();
                         break;
-                    case nameof(Services.AppModel.Sessions):
-                        LastSessions = _appModel.Sessions;
-                        if (ContentFrame?.Content is SessionsPage sp) sp.UpdateSessions(_appModel.Sessions);
-                        else if (ContentFrame?.Content is ConversationsPage convos) convos.UpdateSessions(_appModel.Sessions);
-                        else if (ContentFrame?.Content is HomePage home2) home2.UpdateSessions(_appModel.Sessions);
-                        break;
-                    case nameof(Services.AppModel.Channels):
-                        LastChannels = _appModel.Channels;
-                        if (ContentFrame?.Content is ChannelsPage cp) cp.UpdateChannels(_appModel.Channels);
-                        break;
-                    case nameof(Services.AppModel.Usage):
-                        LastUsage = _appModel.Usage;
-                        if (ContentFrame?.Content is UsagePage up1) up1.UpdateUsage(_appModel.Usage!);
-                        break;
-                    case nameof(Services.AppModel.UsageCost):
-                        LastUsageCost = _appModel.UsageCost;
-                        if (ContentFrame?.Content is UsagePage up2) up2.UpdateUsageCost(_appModel.UsageCost!);
-                        break;
-                    case nameof(Services.AppModel.UsageStatus):
-                        LastUsageStatus = _appModel.UsageStatus;
-                        if (ContentFrame?.Content is UsagePage up3) up3.UpdateUsageStatus(_appModel.UsageStatus!);
-                        break;
-                    case nameof(Services.AppModel.Nodes):
-                        LastNodes = _appModel.Nodes;
-                        if (ContentFrame?.Content is NodesPage np) np.UpdateNodes(_appModel.Nodes);
-                        else if (ContentFrame?.Content is HomePage home3) home3.UpdateNodes(_appModel.Nodes);
-                        break;
-                    case nameof(Services.AppModel.NodePairList):
-                        LastNodePairList = _appModel.NodePairList;
-                        if (ContentFrame?.Content is NodesPage np2 && _appModel.NodePairList != null) np2.UpdatePairingRequests(_appModel.NodePairList);
-                        break;
-                    case nameof(Services.AppModel.DevicePairList):
-                        LastDevicePairList = _appModel.DevicePairList;
-                        if (_appModel.DevicePairList != null)
-                        {
-                            if (ContentFrame?.Content is NodesPage np3) np3.UpdateDevicePairingRequests(_appModel.DevicePairList);
-                            if (ContentFrame?.Content is ConnectionPage cp2) cp2.UpdateDevicePairingRequests(_appModel.DevicePairList);
-                        }
-                        break;
-                    case nameof(Services.AppModel.ModelsList):
-                        LastModelsList = _appModel.ModelsList;
-                        if (ContentFrame?.Content is SessionsPage sp2 && _appModel.ModelsList != null) sp2.UpdateModelsList(_appModel.ModelsList);
-                        break;
-                    case nameof(Services.AppModel.Presence):
-                        LastPresence = _appModel.Presence;
-                        if (_appModel.Presence != null)
-                        {
-                            if (ContentFrame?.Content is InstancesPage ip) ip.UpdatePresenceData(_appModel.Presence);
-                            if (ContentFrame?.Content is NodesPage np4) np4.UpdatePresence(_appModel.Presence);
-                        }
-                        break;
-                    case nameof(Services.AppModel.AgentsList):
-                        LastAgentsData = _appModel.AgentsList;
+                    case nameof(Services.AppState.AgentsList):
                         if (_appModel.AgentsList.HasValue)
-                        {
                             RebuildAgentNavItems(_appModel.AgentsList.Value);
-                            if (ContentFrame?.Content is HomePage home4) home4.UpdateAgentsList(_appModel.AgentsList.Value);
-                        }
-                        break;
-                    case nameof(Services.AppModel.Config):
-                        if (_appModel.Config.HasValue)
-                        {
-                            LastConfig = _appModel.Config;
-                            if (ContentFrame?.Content is ConfigPage cfgP) cfgP.UpdateConfig(_appModel.Config.Value);
-                            else if (ContentFrame?.Content is BindingsPage bp) bp.UpdateConfig(_appModel.Config.Value);
-                        }
-                        break;
-                    case nameof(Services.AppModel.ConfigSchema):
-                        if (_appModel.ConfigSchema.HasValue)
-                        {
-                            LastConfigSchema = _appModel.ConfigSchema;
-                            if (ContentFrame?.Content is ConfigPage cfgP2) cfgP2.UpdateConfigSchema(_appModel.ConfigSchema.Value);
-                        }
-                        break;
-                    case nameof(Services.AppModel.CronList):
-                        if (_appModel.CronList.HasValue && ContentFrame?.Content is CronPage cronP)
-                            cronP.UpdateFromGateway(_appModel.CronList.Value);
-                        break;
-                    case nameof(Services.AppModel.CronStatus):
-                        if (_appModel.CronStatus.HasValue && ContentFrame?.Content is CronPage cronP2)
-                            cronP2.UpdateFromGateway(_appModel.CronStatus.Value);
-                        break;
-                    case nameof(Services.AppModel.SkillsStatus):
-                        if (_appModel.SkillsStatus.HasValue && ContentFrame?.Content is SkillsPage skillsP)
-                            skillsP.UpdateFromGateway(_appModel.SkillsStatus.Value);
-                        break;
-                    case nameof(Services.AppModel.AgentFilesList):
-                        if (_appModel.AgentFilesList.HasValue && ContentFrame?.Content is WorkspacePage wp)
-                            wp.UpdateAgentFilesList(_appModel.AgentFilesList.Value);
-                        break;
-                    case nameof(Services.AppModel.AgentFileContent):
-                        if (_appModel.AgentFileContent.HasValue && ContentFrame?.Content is WorkspacePage wp2)
-                            wp2.UpdateAgentFileContent(_appModel.AgentFileContent.Value);
                         break;
                 }
             });
@@ -701,7 +340,6 @@ public sealed partial class HubWindow : WindowEx
                 _agentEvents.Insert(0, evt);
                 if (_agentEvents.Count > MaxAgentEvents)
                     _agentEvents.RemoveRange(MaxAgentEvents, _agentEvents.Count - MaxAgentEvents);
-                if (ContentFrame?.Content is AgentEventsPage agentEvents) agentEvents.AddEvent(evt);
             });
         }
         catch { }
@@ -742,52 +380,41 @@ public sealed partial class HubWindow : WindowEx
 
     private void InitializeCurrentPage()
     {
+        // Local dispatch that intercepts "settings-saved" (an event from pages
+        // back to the app) and forwards everything else to the external dispatcher.
+        Action<string> dispatch = action =>
+        {
+            if (action == "settings-saved")
+                RaiseSettingsSaved();
+            else
+                DispatchAction?.Invoke(action);
+        };
+
         switch (ContentFrame.Content)
         {
-            case HomePage home: home.Initialize(this); break;
-            case ChatPage chat: chat.Initialize(this); break;
-            case SessionsPage sessions:
-                sessions.Initialize(this);
-                if (LastModelsList != null) sessions.UpdateModelsList(LastModelsList);
-                break;
-            case ConnectionPage connection:
-                connection.Initialize(this);
-                if (LastDevicePairList != null) connection.UpdateDevicePairingRequests(LastDevicePairList);
-                break;
-            case ChannelsPage channels: channels.Initialize(this); break;
-            case UsagePage usage: usage.Initialize(this); break;
-            case NodesPage nodes:
-                nodes.Initialize(this);
-                if (LastNodePairList != null) nodes.UpdatePairingRequests(LastNodePairList);
-                if (LastDevicePairList != null) nodes.UpdateDevicePairingRequests(LastDevicePairList);
-                if (LastPresence != null) nodes.UpdatePresence(LastPresence);
-                break;
-            case CronPage cron: cron.Initialize(this); break;
-            case SkillsPage skills: skills.Initialize(this); break;
+            case HomePage home: home.Initialize(AppModel, GatewayClient, Settings, dispatch); break;
+            case ChatPage chat: chat.Initialize(Settings, GatewayRegistry); break;
+            case SessionsPage sessions: sessions.Initialize(AppModel, GatewayClient); break;
+            case ConnectionPage connection: connection.Initialize(AppModel, GatewayClient, Settings, ConnectionManager, GatewayRegistry, dispatch, LastAuthError, NodeIsPaired, NodeIsPendingApproval, NodeShortDeviceId, NodeFullDeviceId); break;
+            case ChannelsPage channels: channels.Initialize(AppModel, GatewayClient); break;
+            case UsagePage usage: usage.Initialize(AppModel, GatewayClient); break;
+            case NodesPage nodes: nodes.Initialize(AppModel, GatewayClient); break;
+            case CronPage cron: cron.Initialize(AppModel, GatewayClient); break;
+            case SkillsPage skills: skills.Initialize(AppModel, GatewayClient, GetAgentIds); break;
             case ConfigPage config:
-                try
-                {
-                    config.Initialize(this);
-                    if (LastConfigSchema.HasValue) config.UpdateConfigSchema(LastConfigSchema.Value);
-                    if (LastConfig.HasValue) config.UpdateConfig(LastConfig.Value);
-                }
-                catch (Exception ex)
-                {
-                    OpenClawTray.Services.Logger.Error($"[HubWindow] ConfigPage seed failed: {ex}");
-                }
+                try { config.Initialize(AppModel, GatewayClient, dispatch); }
+                catch (Exception ex) { OpenClawTray.Services.Logger.Error($"[HubWindow] ConfigPage seed failed: {ex}"); }
                 break;
-            case InstancesPage instances:
-                instances.Initialize(this);
-                if (LastPresence != null) instances.UpdatePresenceData(LastPresence);
-                break;
-            case PermissionsPage permissions: permissions.Initialize(this); break;
-            case CapabilitiesPage capabilities: capabilities.Initialize(this); break;
-            case VoiceSettingsPage voice: voice.Initialize(this, VoiceServiceInstance); break;
-            case ConversationsPage convos: convos.Initialize(this); break;
-            case ActivityPage activity: activity.Initialize(this); break;
+            case InstancesPage instances: instances.Initialize(AppModel); break;
+            case PermissionsPage permissions: permissions.Initialize(AppModel); break;
+            case CapabilitiesPage capabilities: capabilities.Initialize(AppModel, Settings, VoiceServiceInstance, dispatch); break;
+            case VoiceSettingsPage voice: voice.Initialize(Settings, VoiceServiceInstance); break;
+            case ConversationsPage convos: convos.Initialize(AppModel, GatewayClient); break;
+            case ActivityPage activity: activity.Initialize(); break;
             case AgentEventsPage agentEvents:
                 agentEvents.ClearCentralCache = ClearAgentEvents;
-                agentEvents.PopulateAgentFilter(this);
+                agentEvents.SetAppState(_appModel);
+                agentEvents.PopulateAgentFilter(GetAgentIds);
                 // When navigated via top-level nav (tag "agentevents"), show all agents
                 var agentEventsTag = (NavView?.SelectedItem as NavigationViewItem)?.Tag as string;
                 var eventsAgentFilter = agentEventsTag?.StartsWith("agent:") == true ? _currentAgentId : null;
@@ -798,14 +425,11 @@ public sealed partial class HubWindow : WindowEx
                         agentEvents.AddEvent(LastAgentEvents[i]);
                 }
                 break;
-            case WorkspacePage workspace: workspace.Initialize(this); break;
-            case BindingsPage bindings:
-                bindings.Initialize(this);
-                if (LastConfig.HasValue) bindings.UpdateConfig(LastConfig.Value);
-                break;
-            case SettingsPage settings: settings.Initialize(this); break;
-            case DebugPage debug: debug.Initialize(this); break;
-            case AboutPage about: about.Initialize(this); break;
+            case WorkspacePage workspace: workspace.Initialize(AppModel, GatewayClient, CurrentAgentId); break;
+            case BindingsPage bindings: bindings.Initialize(AppModel, GatewayClient); break;
+            case SettingsPage settings: settings.Initialize(Settings, dispatch); break;
+            case DebugPage debug: debug.Initialize(AppModel, Settings, dispatch); break;
+            case AboutPage about: about.Initialize(AppModel, Settings, dispatch); break;
         }
     }
 
@@ -966,7 +590,7 @@ public sealed partial class HubWindow : WindowEx
 
             // Actions
             new() { Icon = "💬", Title = "Open Chat Window", Subtitle = "Open standalone chat", Tag = "chat" },
-            new() { Icon = "🌐", Title = "Open Dashboard", Subtitle = "Open web dashboard", Execute = () => OpenDashboardAction?.Invoke(null) },
+            new() { Icon = "🌐", Title = "Open Dashboard", Subtitle = "Open web dashboard", Execute = () => DispatchAction?.Invoke("dashboard") },
             new() { Icon = "📤", Title = "Quick Send", Subtitle = "Send a quick message", Execute = () => QuickSendAction?.Invoke() },
         };
 
@@ -1015,7 +639,7 @@ public sealed partial class HubWindow : WindowEx
                 {
                     Icon = "🧠", Title = $"Go to session: {key}",
                     Subtitle = "Open in dashboard",
-                    Execute = () => OpenDashboardAction?.Invoke($"sessions/{key}")
+                    Execute = () => DispatchAction?.Invoke($"dashboard:sessions/{key}")
                 });
             }
         }

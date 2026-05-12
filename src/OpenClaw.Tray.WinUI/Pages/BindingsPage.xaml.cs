@@ -1,29 +1,41 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using OpenClawTray.Windows;
+using OpenClaw.Shared;
+using OpenClawTray.Services;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Text.Json;
 
 namespace OpenClawTray.Pages;
 
 public sealed partial class BindingsPage : Page
 {
-    private HubWindow? _hub;
+    private IOperatorGatewayClient? _client;
+    private AppState? _state;
 
     public BindingsPage()
     {
         InitializeComponent();
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state, IOperatorGatewayClient? client)
     {
-        _hub = hub;
+        _client = client;
+        _state = state;
+        if (_state != null)
+            _state.PropertyChanged += OnStateChanged;
         // Use cached config if available
-        if (hub.LastConfig.HasValue)
-            ParseBindings(hub.LastConfig.Value);
+        if (state?.Config.HasValue == true)
+            ParseBindings(state.Config.Value);
         // Request fresh config
-        if (hub.GatewayClient != null)
-            _ = hub.GatewayClient.RequestConfigAsync();
+        if (client != null)
+            _ = client.RequestConfigAsync();
+    }
+
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AppState.Config) && _state!.Config.HasValue)
+            UpdateConfig(_state.Config.Value);
     }
 
     public void UpdateConfig(JsonElement config)
@@ -78,9 +90,9 @@ public sealed partial class BindingsPage : Page
 
     private void RefreshButton_Click(object sender, RoutedEventArgs e)
     {
-        if (_hub?.GatewayClient != null)
+        if (_client != null)
         {
-            _ = _hub.GatewayClient.RequestConfigAsync();
+            _ = _client.RequestConfigAsync();
         }
     }
 

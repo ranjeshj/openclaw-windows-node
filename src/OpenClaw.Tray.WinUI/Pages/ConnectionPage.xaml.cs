@@ -4,9 +4,9 @@ using OpenClaw.Shared;
 using OpenClawTray.Onboarding.Services;
 using OpenClawTray.Services;
 using OpenClawTray.Services.Connection;
-using OpenClawTray.Windows;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using Windows.ApplicationModel.DataTransfer;
 
@@ -14,7 +14,15 @@ namespace OpenClawTray.Pages;
 
 public sealed partial class ConnectionPage : Page
 {
-    private HubWindow? _hub;
+    private IOperatorGatewayClient? _client;
+    private SettingsManager? _settings;
+    private Action<string>? _dispatch;
+    private string? _lastAuthError;
+    private bool _nodeIsPaired;
+    private bool _nodeIsPendingApproval;
+    private string? _nodeShortDeviceId;
+    private string? _nodeFullDeviceId;
+    private AppState? _state;
     private IGatewayConnectionManager? _connectionManager;
     private GatewayRegistry? _gatewayRegistry;
     private int _connectionAttempts;
@@ -24,12 +32,21 @@ public sealed partial class ConnectionPage : Page
         InitializeComponent();
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state, IOperatorGatewayClient? client, SettingsManager? settings, IGatewayConnectionManager? connectionManager, GatewayRegistry? gatewayRegistry, Action<string>? dispatch, string? lastAuthError, bool nodeIsPaired, bool nodeIsPendingApproval, string? nodeShortDeviceId, string? nodeFullDeviceId)
     {
-        _hub = hub;
-        _connectionManager = hub.ConnectionManager;
-        _gatewayRegistry = hub.GatewayRegistry;
-        var settings = hub.Settings;
+        _client = client;
+        _settings = settings;
+        _dispatch = dispatch;
+        _lastAuthError = lastAuthError;
+        _nodeIsPaired = nodeIsPaired;
+        _nodeIsPendingApproval = nodeIsPendingApproval;
+        _nodeShortDeviceId = nodeShortDeviceId;
+        _nodeFullDeviceId = nodeFullDeviceId;
+        _state = state;
+        if (_state != null)
+            _state.PropertyChanged += OnStateChanged;
+        _connectionManager = connectionManager;
+        _gatewayRegistry = gatewayRegistry;
         if (settings == null) return;
 
         // Subscribe to live state changes from the connection manager
@@ -45,10 +62,25 @@ public sealed partial class ConnectionPage : Page
         SshRemotePortBox.Text = settings.SshTunnelRemotePort.ToString();
         SshLocalPortBox.Text = settings.SshTunnelLocalPort.ToString();
 
-        UpdateStatus(hub.CurrentStatus);
+        UpdateStatus(state?.Status ?? ConnectionStatus.Disconnected);
         UpdateDeviceIdentity();
+        if (_state?.DevicePairList != null) UpdateDevicePairingRequests(_state.DevicePairList);
         LoadConnectionLog();
         LoadRecentGateways();
+    }
+
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        switch (e.PropertyName)
+        {
+            case nameof(AppState.Status):
+                UpdateStatus(_state!.Status);
+                break;
+            case nameof(AppState.DevicePairList):
+                if (_state!.DevicePairList != null)
+                    UpdateDevicePairingRequests(_state.DevicePairList);
+                break;
+        }
     }
 
     private static readonly Microsoft.UI.Xaml.Media.SolidColorBrush s_greenBrush = new(Microsoft.UI.ColorHelper.FromArgb(255, 76, 175, 80));
@@ -111,8 +143,8 @@ public sealed partial class ConnectionPage : Page
         }
 
         // Gateway details
-        var self = _hub?.LastGatewaySelf;
-        var effectiveUrl = _hub?.Settings?.GetEffectiveGatewayUrl() ?? "";
+        var self = _state?.GatewaySelf;
+        var effectiveUrl = _settings?.GetEffectiveGatewayUrl() ?? "";
         if (self != null && isConnected)
         {
             var parts = new List<string>();
@@ -141,7 +173,7 @@ public sealed partial class ConnectionPage : Page
         LoadConnectionLog();
 
         // Show auth error if present
-        var authError = _hub?.LastAuthError;
+        var authError = _lastAuthError;
         if (!string.IsNullOrEmpty(authError))
         {
             AuthErrorBar.Message = GetAuthErrorGuidance(authError!);
@@ -257,7 +289,7 @@ public sealed partial class ConnectionPage : Page
 
     private void OnOpenDiagnostics(object sender, RoutedEventArgs e)
     {
-        _hub?.OpenConnectionStatusAction?.Invoke();
+        _dispatch?.Invoke("connectionstatus");
     }
 
     /// <summary>
@@ -275,7 +307,7 @@ public sealed partial class ConnectionPage : Page
         DevicePairingCard.Visibility = Visibility.Visible;
 
         // Check if operator has scope to approve/reject
-        var scopes = _hub?.GatewayClient?.GrantedOperatorScopes ?? (IReadOnlyList<string>)Array.Empty<string>();
+        var scopes = _client?.GrantedOperatorScopes ?? (IReadOnlyList<string>)Array.Empty<string>();
         var canPair = scopes.Any(s =>
             s.Equals("operator.admin", StringComparison.OrdinalIgnoreCase) ||
             s.Equals("operator.pairing", StringComparison.OrdinalIgnoreCase));
@@ -333,7 +365,7 @@ public sealed partial class ConnectionPage : Page
                     rejectBtn.IsEnabled = false;
                     try
                     {
-                        var client = _hub?.GatewayClient;
+                        var client = _client;
                         if (client != null)
                         {
                             var ok = await client.DevicePairApproveAsync(capturedId);
@@ -363,7 +395,7 @@ public sealed partial class ConnectionPage : Page
                     rejectBtn.IsEnabled = false;
                     try
                     {
-                        var client = _hub?.GatewayClient;
+                        var client = _client;
                         if (client != null)
                         {
                             var ok = await client.DevicePairRejectAsync(capturedId);
@@ -414,22 +446,22 @@ public sealed partial class ConnectionPage : Page
 
     private void UpdateDeviceIdentity()
     {
-        if (_hub == null) return;
+        if (_settings == null) return;
 
-        var shortId = _hub.NodeShortDeviceId;
-        var fullId = _hub.NodeFullDeviceId;
+        var shortId = _nodeShortDeviceId;
+        var fullId = _nodeFullDeviceId;
 
         if (!string.IsNullOrEmpty(shortId) || !string.IsNullOrEmpty(fullId))
         {
             DeviceIdentityCard.Visibility = Visibility.Visible;
             DeviceIdText.Text = shortId ?? fullId ?? "";
 
-            if (_hub.NodeIsPaired)
+            if (_nodeIsPaired)
             {
                 PairingStatusText.Text = "Pairing: ✓ Paired";
                 ApprovalHelpPanel.Visibility = Visibility.Collapsed;
             }
-            else if (_hub.NodeIsPendingApproval)
+            else if (_nodeIsPendingApproval)
             {
                 PairingStatusText.Text = "Pairing: ⏳ Pending approval";
                 ApprovalHelpPanel.Visibility = Visibility.Visible;
@@ -493,13 +525,13 @@ public sealed partial class ConnectionPage : Page
 
     private void OnDisconnect(object sender, RoutedEventArgs e)
     {
-        _hub?.DisconnectAction?.Invoke();
+        _dispatch?.Invoke("disconnect");
     }
 
     private void OnReconnect(object sender, RoutedEventArgs e)
     {
         _connectionAttempts = 0;
-        _hub?.ReconnectAction?.Invoke();
+        _dispatch?.Invoke("reconnect");
     }
 
     private void OnSshToggled(object sender, RoutedEventArgs e)
@@ -580,7 +612,7 @@ public sealed partial class ConnectionPage : Page
             }
 
             // Save settings (SSH config + gateway URL for legacy compat)
-            var settings = _hub?.Settings;
+            var settings = _settings;
             if (settings != null)
             {
                 settings.GatewayUrl = url;
@@ -655,7 +687,7 @@ public sealed partial class ConnectionPage : Page
                 return;
             }
 
-            var settings = _hub?.Settings;
+            var settings = _settings;
             if (settings == null) return;
 
             if (!string.IsNullOrEmpty(decoded.Url))
@@ -664,7 +696,7 @@ public sealed partial class ConnectionPage : Page
             settings.Save();
             SetupCodeResultText.Text = $"✓ Applied — gateway: {SanitizeUrl(decoded.Url ?? settings.GatewayUrl ?? "")}";
             GatewayUrlTextBox.Text = settings.GatewayUrl ?? "";
-            _hub?.RaiseSettingsSaved();
+            _dispatch?.Invoke("settings-saved");
         }
     }
 
@@ -797,7 +829,7 @@ public sealed partial class ConnectionPage : Page
 
     private void OnCopyDeviceId(object sender, RoutedEventArgs e)
     {
-        var id = _hub?.NodeFullDeviceId ?? _hub?.NodeShortDeviceId;
+        var id = _nodeFullDeviceId ?? _nodeShortDeviceId;
         if (string.IsNullOrEmpty(id)) return;
         CopyToClipboard(id);
     }

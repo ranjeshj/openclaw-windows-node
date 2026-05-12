@@ -3,16 +3,18 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using OpenClaw.Shared;
-using OpenClawTray.Windows;
+using OpenClawTray.Services;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 
 namespace OpenClawTray.Pages;
 
 public sealed partial class ConversationsPage : Page
 {
-    private HubWindow? _hub;
+    private IOperatorGatewayClient? _client;
+    private AppState? _state;
     private SessionInfo[]? _allSessions;
 
     public ConversationsPage()
@@ -20,11 +22,14 @@ public sealed partial class ConversationsPage : Page
         InitializeComponent();
     }
 
-    public void Initialize(HubWindow hub)
+    internal void Initialize(AppState? state, IOperatorGatewayClient? client)
     {
-        _hub = hub;
+        _client = client;
+        _state = state;
+        if (_state != null)
+            _state.PropertyChanged += OnStateChanged;
 
-        if (hub.CurrentStatus != ConnectionStatus.Connected || hub.GatewayClient == null)
+        if ((state?.Status ?? ConnectionStatus.Disconnected) != ConnectionStatus.Connected || client == null)
         {
             ConnectionWarning.IsOpen = true;
             EmptyState.Visibility = Visibility.Collapsed;
@@ -35,10 +40,16 @@ public sealed partial class ConversationsPage : Page
         ConnectionWarning.IsOpen = false;
 
         // Use cached data immediately, then request fresh
-        if (hub.LastSessions != null)
-            UpdateSessions(hub.LastSessions);
+        if (state?.Sessions != null)
+            UpdateSessions(state.Sessions);
 
-        _ = hub.GatewayClient.RequestSessionsAsync();
+        _ = client.RequestSessionsAsync();
+    }
+
+    private void OnStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AppState.Sessions))
+            UpdateSessions(_state!.Sessions);
     }
 
     public void UpdateSessions(SessionInfo[] sessions)
@@ -106,14 +117,14 @@ public sealed partial class ConversationsPage : Page
     private void FilterCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         // Guard against firing during InitializeComponent before page is fully initialized
-        if (_hub == null) return;
+        if (_state == null) return;
         ApplyFilter();
     }
 
     private async void OnRefresh(object sender, RoutedEventArgs e)
     {
-        if (_hub?.GatewayClient != null)
-            await _hub.GatewayClient.RequestSessionsAsync();
+        if (_client != null)
+            await _client.RequestSessionsAsync();
     }
 
     private static string FormatTokenCount(long n)
