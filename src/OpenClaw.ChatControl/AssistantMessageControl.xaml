@@ -40,10 +40,40 @@
             <!-- Rendered markdown (shown after completion) -->
             <ContentPresenter x:Name="RenderedContent" Visibility="Collapsed"/>
 
-            <!-- Metadata footer (sender · time · tokens · model) -->
-            <TextBlock x:Name="MetadataFooterText" FontSize="11"
-                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                       Visibility="Collapsed" Margin="0,4,0,0"/>
+            <!-- Metadata footer with action icons (sender · time · tokens · model + copy/speak) -->
+            <Grid x:Name="FooterGrid" Visibility="Collapsed" Margin="0,4,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="MetadataFooterText" Grid.Column="0" FontSize="11"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                           VerticalAlignment="Center"/>
+
+                <!-- Copy + Read Aloud action icons -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4"
+                            VerticalAlignment="Center">
+                    <Button x:Name="CopyButton" Click="OnCopyClick"
+                            Width="26" Height="26" Padding="0"
+                            Background="Transparent" BorderThickness="0">
+                        <ToolTipService.ToolTip>
+                            <ToolTip Content="Copy"/>
+                        </ToolTipService.ToolTip>
+                        <FontIcon x:Name="CopyIcon" Glyph="&#xE8C8;" FontSize="13"
+                                  Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                    </Button>
+                    <Button x:Name="ReadAloudButton" Click="OnReadAloudClick"
+                            Width="26" Height="26" Padding="0"
+                            Background="Transparent" BorderThickness="0">
+                        <ToolTipService.ToolTip>
+                            <ToolTip Content="Read aloud"/>
+                        </ToolTipService.ToolTip>
+                        <FontIcon x:Name="ReadAloudIcon" Glyph="&#xE767;" FontSize="13"
+                                  Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
+                    </Button>
+                </StackPanel>
+            </Grid>
 
             <!-- Error/aborted indicator -->
             <StackPanel x:Name="ErrorPanel" Orientation="Horizontal" Spacing="6" Visibility="Collapsed">

@@ -5,7 +5,9 @@ using OpenClaw.Shared;
 using OpenClawTray.Chat;
 using OpenClawTray.Services;
 using System;
+using System.IO;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using WinUIEx;
 
 namespace OpenClawTray.Windows;
@@ -14,6 +16,7 @@ namespace OpenClawTray.Windows;
 /// Native WinUI chat window with Win32 tray integration:
 /// tool window (hidden from taskbar), DPI-aware tray positioning,
 /// auto-hide on deactivation, hide-instead-of-close.
+/// Persists user-resized dimensions across sessions.
 /// </summary>
 public sealed partial class NativeChatWindow : Window
 {
@@ -29,14 +32,18 @@ public sealed partial class NativeChatWindow : Window
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hWnd);
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, uint attr, ref int val, int size);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT2 rect);
 
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const uint MONITOR_DEFAULTTONEAREST = 2;
     private const uint DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     private const int DWMWCP_ROUND = 2;
-    private const int PanelWidthDip = 480;
-    private const int PanelHeightDip = 640;
+    private const int DefaultWidthDip = 480;
+    private const int DefaultHeightDip = 640;
+
+    private int _panelWidthDip = DefaultWidthDip;
+    private int _panelHeightDip = DefaultHeightDip;
 
     [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] private struct RECT2 { public int Left, Top, Right, Bottom; }
@@ -53,7 +60,9 @@ public sealed partial class NativeChatWindow : Window
     {
         InitializeComponent();
 
-        this.SetWindowSize(PanelWidthDip, PanelHeightDip);
+        LoadPersistedSize();
+
+        this.SetWindowSize(_panelWidthDip, _panelHeightDip);
         this.SetIcon(Helpers.IconHelper.GetStatusIconPath(ConnectionStatus.Connected));
 
         // Hide system title bar and caption buttons (min/max/close)
@@ -108,26 +117,28 @@ public sealed partial class NativeChatWindow : Window
         uint dpi = GetDpiForWindow(hwnd);
         double scale = dpi / 96.0;
 
-        int panelWPx = (int)(PanelWidthDip * scale);
-        int panelHPx = (int)(PanelHeightDip * scale);
+        int panelWPx = (int)(_panelWidthDip * scale);
+        int panelHPx = (int)(_panelHeightDip * scale);
 
         int margin = 8;
         int x = work.Right - panelWPx - margin;
         int y = work.Bottom - panelHPx - margin;
 
         this.Move(x, y);
-        this.SetWindowSize(PanelWidthDip, PanelHeightDip);
+        this.SetWindowSize(_panelWidthDip, _panelHeightDip);
         this.Show();
         SetForegroundWindow(hwnd);
     }
 
     private void OnChatCloseRequested(object sender, EventArgs e)
     {
+        SaveCurrentSize();
         this.Hide();
     }
 
     public void ForceClose()
     {
+        SaveCurrentSize();
         Closed -= OnWindowClosing;
         IsClosed = true;
         _viewModel?.Dispose();
@@ -138,12 +149,75 @@ public sealed partial class NativeChatWindow : Window
     private void OnWindowActivated(object sender, WindowActivatedEventArgs args)
     {
         if (args.WindowActivationState == WindowActivationState.Deactivated)
+        {
+            SaveCurrentSize();
             this.Hide();
+        }
     }
 
     private void OnWindowClosing(object sender, WindowEventArgs args)
     {
         args.Handled = true;
+        SaveCurrentSize();
         this.Hide();
+    }
+
+    // ── Window size persistence ──
+
+    private static string SizeFilePath =>
+        Path.Combine(SettingsManager.SettingsDirectoryPath, "chat-window-state.json");
+
+    private void LoadPersistedSize()
+    {
+        try
+        {
+            var path = SizeFilePath;
+            if (!File.Exists(path)) return;
+
+            var json = File.ReadAllText(path);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("width", out var w) && w.ValueKind == JsonValueKind.Number)
+                _panelWidthDip = Math.Clamp(w.GetInt32(), 320, 1200);
+            if (root.TryGetProperty("height", out var h) && h.ValueKind == JsonValueKind.Number)
+                _panelHeightDip = Math.Clamp(h.GetInt32(), 400, 1600);
+        }
+        catch
+        {
+            // Ignore corrupt/missing file — use defaults
+        }
+    }
+
+    private void SaveCurrentSize()
+    {
+        try
+        {
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+            if (!GetWindowRect(hwnd, out var rect)) return;
+
+            uint dpi = GetDpiForWindow(hwnd);
+            double scale = dpi / 96.0;
+            if (scale < 0.5) scale = 1.0;
+
+            int widthDip = (int)((rect.Right - rect.Left) / scale);
+            int heightDip = (int)((rect.Bottom - rect.Top) / scale);
+
+            // Only persist reasonable sizes
+            if (widthDip < 320 || widthDip > 1200 || heightDip < 400 || heightDip > 1600) return;
+
+            _panelWidthDip = widthDip;
+            _panelHeightDip = heightDip;
+
+            var dir = Path.GetDirectoryName(SizeFilePath);
+            if (dir != null) Directory.CreateDirectory(dir);
+
+            var json = JsonSerializer.Serialize(new { width = widthDip, height = heightDip });
+            File.WriteAllText(SizeFilePath, json);
+        }
+        catch
+        {
+            // Best-effort — don't crash on save failure
+        }
     }
 }

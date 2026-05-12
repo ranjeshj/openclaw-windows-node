@@ -1,7 +1,10 @@
+using System;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Windows.ApplicationModel.DataTransfer;
 
 namespace OpenClaw.ChatControl;
 
@@ -165,8 +168,40 @@ public sealed partial class AssistantMessageControl : UserControl
         if (!string.IsNullOrEmpty(footer))
         {
             MetadataFooterText.Text = footer;
-            MetadataFooterText.Visibility = Visibility.Visible;
+            FooterGrid.Visibility = Visibility.Visible;
         }
+    }
+
+    /// <summary>Fired when user clicks Read Aloud — consumer handles TTS.</summary>
+    public event EventHandler<string>? ReadAloudRequested;
+
+    private async void OnCopyClick(object sender, RoutedEventArgs e)
+    {
+        if (_message == null || string.IsNullOrEmpty(_message.Content)) return;
+        try
+        {
+            var dp = new DataPackage();
+            dp.SetText(_message.Content);
+            Clipboard.SetContent(dp);
+            Clipboard.Flush();
+
+            // Ack feedback: swap to checkmark for 700ms
+            CopyIcon.Glyph = "\uE73E"; // Checkmark
+            await Task.Delay(700);
+            CopyIcon.Glyph = "\uE8C8"; // Copy
+        }
+        catch { /* clipboard contention */ }
+    }
+
+    private async void OnReadAloudClick(object sender, RoutedEventArgs e)
+    {
+        if (_message == null || string.IsNullOrEmpty(_message.Content)) return;
+        ReadAloudRequested?.Invoke(this, _message.Content);
+
+        // Ack feedback
+        ReadAloudIcon.Glyph = "\uE73E";
+        await Task.Delay(700);
+        ReadAloudIcon.Glyph = "\uE767";
     }
 
     private void RenderMarkdown()

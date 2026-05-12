@@ -63,11 +63,9 @@
                                 Background="{ThemeResource SubtleFillColorTertiaryBrush}"
                                 BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
                                 BorderThickness="1">
-                            <ContentPresenter x:Name="AssistantAvatarPresenter"
-                                              HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <FontIcon Glyph="&#xE945;" FontSize="16"
-                                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                            </ContentPresenter>
+                            <FontIcon Glyph="&#xE945;" FontSize="16"
+                                      Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <!-- Bubble -->
                         <local:AssistantMessageControl DataContext="{x:Bind}" Grid.Column="1"/>
