@@ -22,6 +22,10 @@ public sealed partial class ChatPanel : UserControl
     /// <summary>Fired when the user clicks the pop-out button in the header.</summary>
     public event EventHandler? PopoutRequested;
 
+    /// <summary>Fired when the user requests a message action (e.g. ReadAloud). 
+    /// Copy and Delete are handled internally; ReadAloud is surfaced for consumer wiring.</summary>
+    public event EventHandler<ChatMessageActionEventArgs>? MessageActionRequested;
+
     public ChatPanel()
     {
         InitializeComponent();

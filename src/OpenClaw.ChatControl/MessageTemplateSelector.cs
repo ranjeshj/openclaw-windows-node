@@ -11,6 +11,7 @@ public sealed class MessageTemplateSelector : DataTemplateSelector
     public DataTemplate? UserTemplate { get; set; }
     public DataTemplate? AssistantTemplate { get; set; }
     public DataTemplate? SystemTemplate { get; set; }
+    public DataTemplate? StatusTemplate { get; set; }
 
     protected override DataTemplate? SelectTemplateCore(object item, DependencyObject container)
     {
@@ -21,6 +22,7 @@ public sealed class MessageTemplateSelector : DataTemplateSelector
                 MessageRole.User => UserTemplate,
                 MessageRole.Assistant => AssistantTemplate,
                 MessageRole.System => SystemTemplate,
+                MessageRole.Status => StatusTemplate ?? SystemTemplate,
                 _ => AssistantTemplate
             };
         }

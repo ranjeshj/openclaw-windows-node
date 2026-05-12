@@ -29,8 +29,24 @@ public partial class ToolCallInfo : ObservableObject
     [ObservableProperty]
     public partial string? ResultSummary { get; set; }
 
-    /// <summary>Display label: "⚡ tool_name".</summary>
-    public string DisplayLabel => $"⚡ {Name}";
+    /// <summary>Pretty-printed JSON of the tool call arguments.</summary>
+    [ObservableProperty]
+    public partial string? ArgsJson { get; set; }
+
+    /// <summary>Full tool output text.</summary>
+    [ObservableProperty]
+    public partial string? ToolOutput { get; set; }
+
+    /// <summary>Display label with tool-specific icon prefix.</summary>
+    public string DisplayLabel => Name switch
+    {
+        "bash" or "powershell" => $"$ {Name}",
+        "grep" => $"🔍 {CapitalizeFirst(Name)}",
+        "glob" => $"📂 {CapitalizeFirst(Name)}",
+        "web_fetch" => $"🌐 {CapitalizeFirst(Name)}",
+        "web_search" => $"🔎 {CapitalizeFirst(Name)}",
+        _ => $"⚡ {CapitalizeFirst(Name)}"
+    };
 
     /// <summary>Status icon for the current phase.</summary>
     public string StatusIcon => Phase switch
@@ -40,6 +56,9 @@ public partial class ToolCallInfo : ObservableObject
         ToolCallPhase.Error => "❌",
         _ => ""
     };
+
+    private static string CapitalizeFirst(string s) =>
+        string.IsNullOrEmpty(s) ? s : char.ToUpperInvariant(s[0]) + (s.Length > 1 ? s[1..] : "");
 }
 
 public enum ToolCallPhase

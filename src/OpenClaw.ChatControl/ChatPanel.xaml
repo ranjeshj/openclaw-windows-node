@@ -7,25 +7,43 @@
     <UserControl.Resources>
         <ResourceDictionary>
             <x:Double x:Key="ChatBubbleMaxWidth">600</x:Double>
+            <x:Double x:Key="ChatAvatarSize">36</x:Double>
             <CornerRadius x:Key="ChatUserBubbleCornerRadius">12,12,2,12</CornerRadius>
             <CornerRadius x:Key="ChatAssistantBubbleCornerRadius">12,12,12,2</CornerRadius>
             <Thickness x:Key="ChatBubblePadding">12,8,12,8</Thickness>
-            <Thickness x:Key="ChatMessageMargin">0,2,0,2</Thickness>
+            <Thickness x:Key="ChatMessageMargin">0,4,0,4</Thickness>
 
             <!-- User message template -->
             <DataTemplate x:Key="UserMessageTemplate" x:DataType="local:ChatMessage">
                 <StackPanel Margin="{StaticResource ChatMessageMargin}" HorizontalAlignment="Right"
                             MaxWidth="{StaticResource ChatBubbleMaxWidth}">
-                    <Border Background="{ThemeResource SystemAccentColor}"
-                            CornerRadius="{StaticResource ChatUserBubbleCornerRadius}"
-                            Padding="{StaticResource ChatBubblePadding}">
-                        <TextBlock Text="{x:Bind Content, Mode=OneWay}"
-                                   Foreground="White" TextWrapping="Wrap"
-                                   IsTextSelectionEnabled="True"/>
-                    </Border>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <!-- Bubble -->
+                        <Border Grid.Column="0"
+                                Background="{ThemeResource AccentFillColorDefaultBrush}"
+                                CornerRadius="{StaticResource ChatUserBubbleCornerRadius}"
+                                Padding="{StaticResource ChatBubblePadding}">
+                            <TextBlock Text="{x:Bind Content, Mode=OneWay}"
+                                       Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
+                                       TextWrapping="Wrap" IsTextSelectionEnabled="True"/>
+                        </Border>
+                        <!-- User Avatar -->
+                        <Border Grid.Column="1" Margin="8,4,0,0" VerticalAlignment="Top"
+                                Width="{StaticResource ChatAvatarSize}" Height="{StaticResource ChatAvatarSize}"
+                                CornerRadius="18"
+                                Background="{ThemeResource AccentFillColorDefaultBrush}">
+                            <FontIcon Glyph="&#xE77B;" FontSize="16"
+                                      Foreground="{ThemeResource TextOnAccentFillColorPrimaryBrush}"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </Grid>
                     <TextBlock Text="{x:Bind FormattedTime}" FontSize="11"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                               HorizontalAlignment="Right" Margin="0,2,4,0"/>
+                               HorizontalAlignment="Right" Margin="0,2,44,0"/>
                 </StackPanel>
             </DataTemplate>
 
@@ -38,15 +56,25 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <!-- Avatar -->
-                        <TextBlock Text="&#x1F99E;" FontSize="20" VerticalAlignment="Top"
-                                   Margin="0,4,8,0" Grid.Column="0"/>
+                        <!-- Assistant Avatar -->
+                        <Border Grid.Column="0" Margin="0,4,8,0" VerticalAlignment="Top"
+                                Width="{StaticResource ChatAvatarSize}" Height="{StaticResource ChatAvatarSize}"
+                                CornerRadius="18"
+                                Background="{ThemeResource SubtleFillColorTertiaryBrush}"
+                                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                                BorderThickness="1">
+                            <ContentPresenter x:Name="AssistantAvatarPresenter"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <FontIcon Glyph="&#xE945;" FontSize="16"
+                                          Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            </ContentPresenter>
+                        </Border>
                         <!-- Bubble -->
                         <local:AssistantMessageControl DataContext="{x:Bind}" Grid.Column="1"/>
                     </Grid>
                     <TextBlock Text="{x:Bind FormattedTime}" FontSize="11"
                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                               HorizontalAlignment="Left" Margin="36,2,0,0"/>
+                               HorizontalAlignment="Left" Margin="44,2,0,0"/>
                 </StackPanel>
             </DataTemplate>
 
@@ -60,10 +88,23 @@
                 </Grid>
             </DataTemplate>
 
+            <!-- Status message template (toned: info/success/warning/error/dim) -->
+            <DataTemplate x:Key="StatusMessageTemplate" x:DataType="local:ChatMessage">
+                <Border Margin="{StaticResource ChatMessageMargin}" HorizontalAlignment="Center"
+                        CornerRadius="6" Padding="12,4,12,4" MaxWidth="500"
+                        Background="{ThemeResource SubtleFillColorTertiaryBrush}">
+                    <TextBlock Text="{x:Bind Content, Mode=OneWay}"
+                               FontSize="12" FontStyle="Italic"
+                               TextWrapping="Wrap" TextAlignment="Center"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                </Border>
+            </DataTemplate>
+
             <local:MessageTemplateSelector x:Key="MessageSelector"
                                            UserTemplate="{StaticResource UserMessageTemplate}"
                                            AssistantTemplate="{StaticResource AssistantMessageTemplate}"
-                                           SystemTemplate="{StaticResource SystemMessageTemplate}"/>
+                                           SystemTemplate="{StaticResource SystemMessageTemplate}"
+                                           StatusTemplate="{StaticResource StatusMessageTemplate}"/>
         </ResourceDictionary>
     </UserControl.Resources>
 
@@ -87,17 +128,18 @@
             </Grid.ColumnDefinitions>
 
             <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                <TextBlock Text="&#x1F99E;" FontSize="16"/>
+                <ContentPresenter x:Name="HeaderIconPresenter">
+                    <FontIcon Glyph="&#xE8BD;" FontSize="16"/>
+                </ContentPresenter>
                 <TextBlock Text="Chat" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center"/>
             </StackPanel>
 
             <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
                 <Button x:Name="PopoutButton" Click="OnPopoutClick"
                         Width="28" Height="28" Padding="0"
-                        Background="Transparent" BorderThickness="0"
-                        BorderBrush="Red">
+                        Background="Transparent" BorderThickness="0">
                     <ToolTipService.ToolTip>
-                        <ToolTip Content="Open in Browser (not wired)"/>
+                        <ToolTip Content="Open in Browser"/>
                     </ToolTipService.ToolTip>
                     <FontIcon Glyph="&#xE8A7;" FontSize="12"/>
                 </Button>
@@ -129,7 +171,8 @@
             <!-- Empty state -->
             <StackPanel x:Name="EmptyState"
                         VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="8">
-                <TextBlock Text="&#x1F99E;" FontSize="48" HorizontalAlignment="Center"/>
+                <FontIcon Glyph="&#xE8BD;" FontSize="48" HorizontalAlignment="Center"
+                          Foreground="{ThemeResource TextFillColorTertiaryBrush}"/>
                 <TextBlock Text="Start a conversation"
                            Style="{StaticResource SubtitleTextBlockStyle}"
                            HorizontalAlignment="Center"/>

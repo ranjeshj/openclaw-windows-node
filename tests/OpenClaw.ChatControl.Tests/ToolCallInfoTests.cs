@@ -19,7 +19,7 @@ public class ToolCallInfoTests
     public void DisplayLabel_FormatCorrect()
     {
         var tc = new ToolCallInfo("tc-1", "web_search");
-        Assert.Equal("⚡ web_search", tc.DisplayLabel);
+        Assert.Equal("🔎 Web_search", tc.DisplayLabel);
     }
 
     [Fact]
@@ -67,5 +67,33 @@ public class ToolCallInfoTests
         tc.Phase = ToolCallPhase.Error;
 
         Assert.Equal(ToolCallPhase.Error, tc.Phase);
+    }
+
+    [Fact]
+    public void DisplayLabel_ToolSpecificIcons()
+    {
+        Assert.StartsWith("🔍", new ToolCallInfo("t1", "grep").DisplayLabel);
+        Assert.StartsWith("📂", new ToolCallInfo("t2", "glob").DisplayLabel);
+        Assert.StartsWith("🌐", new ToolCallInfo("t3", "web_fetch").DisplayLabel);
+        Assert.StartsWith("$", new ToolCallInfo("t4", "bash").DisplayLabel);
+        Assert.StartsWith("⚡", new ToolCallInfo("t5", "exec").DisplayLabel);
+    }
+
+    [Fact]
+    public void ArgsJson_StoredCorrectly()
+    {
+        var tc = new ToolCallInfo("tc-1", "read");
+        tc.ArgsJson = "{ \"path\": \"main.cs\" }";
+
+        Assert.Equal("{ \"path\": \"main.cs\" }", tc.ArgsJson);
+    }
+
+    [Fact]
+    public void ToolOutput_StoredCorrectly()
+    {
+        var tc = new ToolCallInfo("tc-1", "read");
+        tc.ToolOutput = "file contents here";
+
+        Assert.Equal("file contents here", tc.ToolOutput);
     }
 }

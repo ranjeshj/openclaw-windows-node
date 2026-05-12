@@ -5,12 +5,15 @@
     xmlns:local="using:OpenClaw.ChatControl">
 
     <Border x:Name="BubbleBorder"
-            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            Background="{ThemeResource SubtleFillColorSecondaryBrush}"
             CornerRadius="12,12,12,2"
             Padding="12,8,12,8"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
             BorderThickness="1" MinHeight="32">
         <StackPanel Spacing="4">
+            <!-- Reasoning block (collapsible, shown when model provides thinking) -->
+            <local:ReasoningBlock x:Name="ReasoningPanel" Visibility="Collapsed"/>
+
             <!-- Thinking indicator -->
             <StackPanel x:Name="ThinkingPanel" Orientation="Horizontal" Spacing="6" Visibility="Collapsed">
                 <ProgressRing IsActive="True" Width="16" Height="16"/>
@@ -36,6 +39,11 @@
 
             <!-- Rendered markdown (shown after completion) -->
             <ContentPresenter x:Name="RenderedContent" Visibility="Collapsed"/>
+
+            <!-- Metadata footer (sender · time · tokens · model) -->
+            <TextBlock x:Name="MetadataFooterText" FontSize="11"
+                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                       Visibility="Collapsed" Margin="0,4,0,0"/>
 
             <!-- Error/aborted indicator -->
             <StackPanel x:Name="ErrorPanel" Orientation="Horizontal" Spacing="6" Visibility="Collapsed">

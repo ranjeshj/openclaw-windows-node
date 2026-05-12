@@ -28,6 +28,8 @@ public sealed class GatewayChatService : IChatService, IDisposable
     public event EventHandler<ChatStreamDelta>? DeltaReceived;
     public event EventHandler<ChatLifecycleEvent>? LifecycleChanged;
     public event EventHandler<ChatToolCallEvent>? ToolCallReceived;
+    public event EventHandler<ChatReasoningEvent>? ReasoningReceived;
+    public event EventHandler<ChatStatusEvent>? StatusReceived;
 
     public async Task<IReadOnlyList<ChatMessage>> LoadHistoryAsync(CancellationToken ct = default)
     {
@@ -92,14 +94,34 @@ public sealed class GatewayChatService : IChatService, IDisposable
             switch (evt.Stream.ToLowerInvariant())
             {
                 case "assistant":
-                    var delta = ExtractDeltaText(evt);
-                    if (!string.IsNullOrEmpty(delta))
+                    // Check if this is reasoning content
+                    var isReasoning = evt.Data.ValueKind == JsonValueKind.Object &&
+                        evt.Data.TryGetProperty("isReasoning", out var reasoningProp) &&
+                        reasoningProp.ValueKind == JsonValueKind.True;
+
+                    if (isReasoning)
                     {
-                        DeltaReceived?.Invoke(this, new ChatStreamDelta
+                        var reasoningDelta = ExtractDeltaText(evt);
+                        if (!string.IsNullOrEmpty(reasoningDelta))
                         {
-                            RunId = evt.RunId,
-                            Delta = delta
-                        });
+                            ReasoningReceived?.Invoke(this, new ChatReasoningEvent
+                            {
+                                RunId = evt.RunId,
+                                Delta = reasoningDelta
+                            });
+                        }
+                    }
+                    else
+                    {
+                        var delta = ExtractDeltaText(evt);
+                        if (!string.IsNullOrEmpty(delta))
+                        {
+                            DeltaReceived?.Invoke(this, new ChatStreamDelta
+                            {
+                                RunId = evt.RunId,
+                                Delta = delta
+                            });
+                        }
                     }
                     break;
 
@@ -111,7 +133,11 @@ public sealed class GatewayChatService : IChatService, IDisposable
                         {
                             RunId = evt.RunId,
                             Phase = phase.Value,
-                            ErrorMessage = phase == ChatLifecyclePhase.Error ? ExtractErrorMessage(evt) : null
+                            ErrorMessage = phase == ChatLifecyclePhase.Error ? ExtractErrorMessage(evt) : null,
+                            Model = ExtractStringField(evt.Data, "model"),
+                            InputTokens = ExtractIntField(evt.Data, "inputTokens"),
+                            OutputTokens = ExtractIntField(evt.Data, "outputTokens"),
+                            ContextPercent = ExtractIntField(evt.Data, "contextPercent"),
                         });
                     }
                     break;
@@ -223,10 +249,25 @@ public sealed class GatewayChatService : IChatService, IDisposable
         if (phase == null)
             return null;
 
+        // Extract tool args as pretty-printed JSON
+        string? argsJson = null;
+        if (phase == ToolCallPhase.Running && evt.Data.TryGetProperty("args", out var args))
+        {
+            try
+            {
+                argsJson = System.Text.Json.JsonSerializer.Serialize(args,
+                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+            }
+            catch { argsJson = args.ToString(); }
+        }
+
+        // Extract full tool output
+        string? toolOutput = null;
         string? resultSummary = null;
         if (phase == ToolCallPhase.Done && evt.Data.TryGetProperty("result", out var result))
         {
-            resultSummary = ExtractToolResultSummary(result);
+            toolOutput = ExtractToolFullOutput(result);
+            resultSummary = TruncateSummary(toolOutput);
         }
 
         return new ChatToolCallEvent
@@ -235,34 +276,59 @@ public sealed class GatewayChatService : IChatService, IDisposable
             ToolCallId = toolCallId,
             ToolName = name,
             Phase = phase.Value,
-            ResultSummary = resultSummary
+            ResultSummary = resultSummary,
+            ArgsJson = argsJson,
+            ToolOutput = toolOutput
         };
     }
 
-    private static string? ExtractToolResultSummary(JsonElement result)
+    private static string? ExtractToolFullOutput(JsonElement result)
     {
-        // Result can be { content: [{ type: "text", text: "..." }] } or a string
         if (result.ValueKind == JsonValueKind.String)
-            return TruncateSummary(result.GetString());
+            return result.GetString();
 
         if (result.ValueKind == JsonValueKind.Object &&
             result.TryGetProperty("content", out var content) &&
             content.ValueKind == JsonValueKind.Array)
         {
+            var sb = new System.Text.StringBuilder();
             foreach (var item in content.EnumerateArray())
             {
                 if (item.TryGetProperty("text", out var text))
-                    return TruncateSummary(text.GetString());
+                {
+                    if (sb.Length > 0) sb.AppendLine();
+                    sb.Append(text.GetString());
+                }
             }
+            return sb.Length > 0 ? sb.ToString() : null;
         }
 
         return null;
+    }
+
+    private static string? ExtractToolResultSummary(JsonElement result)
+    {
+        return TruncateSummary(ExtractToolFullOutput(result));
     }
 
     private static string? TruncateSummary(string? text)
     {
         if (string.IsNullOrEmpty(text)) return null;
         return text.Length > 200 ? text[..200] + "..." : text;
+    }
+
+    private static string? ExtractStringField(JsonElement data, string fieldName)
+    {
+        if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty(fieldName, out var prop))
+            return prop.GetString();
+        return null;
+    }
+
+    private static int? ExtractIntField(JsonElement data, string fieldName)
+    {
+        if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty(fieldName, out var prop) && prop.ValueKind == JsonValueKind.Number)
+            return prop.GetInt32();
+        return null;
     }
 
     public void Dispose()

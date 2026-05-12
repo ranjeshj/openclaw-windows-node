@@ -51,6 +51,67 @@ public partial class ChatMessage : ObservableObject
     /// <summary>Tool calls made during this assistant message's run.</summary>
     public ObservableCollection<ToolCallInfo> ToolCalls { get; } = new();
 
+    // ── Metadata footer fields (set by IChatService implementations) ──
+
+    /// <summary>Sender label (e.g. "Field", "Assistant").</summary>
+    public string? SenderLabel { get; set; }
+
+    /// <summary>Model name (e.g. "gpt-5.5").</summary>
+    public string? ModelName { get; set; }
+
+    /// <summary>Input token count for this response.</summary>
+    public int? InputTokens { get; set; }
+
+    /// <summary>Output token count for this response.</summary>
+    public int? OutputTokens { get; set; }
+
+    /// <summary>Context window usage percentage.</summary>
+    public int? ContextPercent { get; set; }
+
+    /// <summary>Formatted metadata footer (e.g. "Field · 7:54 PM · ↑1.5k · ↓12 · gpt-5.5").</summary>
+    public string MetadataFooter
+    {
+        get
+        {
+            var parts = new System.Collections.Generic.List<string>();
+            if (!string.IsNullOrEmpty(SenderLabel)) parts.Add(SenderLabel);
+            parts.Add(FormattedTime);
+            if (InputTokens is int inN) parts.Add($"↑{FormatTokenCount(inN)}");
+            if (OutputTokens is int outN) parts.Add($"↓{FormatTokenCount(outN)}");
+            if (ContextPercent is int pct) parts.Add($"{pct}% ctx");
+            if (!string.IsNullOrEmpty(ModelName)) parts.Add(ModelName);
+            return string.Join(" · ", parts);
+        }
+    }
+
+    private static string FormatTokenCount(int n) =>
+        n >= 1000 ? $"{n / 1000.0:0.#}k" : n.ToString();
+
+    // ── Reasoning content (for collapsible thinking blocks) ──
+
+    /// <summary>Accumulated reasoning/thinking text from the model.</summary>
+    [ObservableProperty]
+    public partial string ReasoningContent { get; set; } = "";
+
+    /// <summary>Whether this message has reasoning content to display.</summary>
+    [ObservableProperty]
+    public partial bool HasReasoning { get; set; }
+
+    private readonly StringBuilder _reasoningBuffer = new();
+
+    /// <summary>Append a reasoning delta.</summary>
+    public void AppendReasoning(string delta)
+    {
+        _reasoningBuffer.Append(delta);
+        ReasoningContent = _reasoningBuffer.ToString();
+        HasReasoning = true;
+    }
+
+    // ── Status tone (for status messages) ──
+
+    /// <summary>Visual tone for status messages.</summary>
+    public ChatTone? Tone { get; set; }
+
     // Efficient delta accumulation during streaming
     private readonly StringBuilder _contentBuffer = new();
 
@@ -123,7 +184,17 @@ public enum MessageRole
 {
     User,
     Assistant,
-    System
+    System,
+    Status
+}
+
+public enum ChatTone
+{
+    Info,
+    Success,
+    Warning,
+    Error,
+    Dim
 }
 
 public enum MessageStatus
@@ -145,4 +216,17 @@ public enum MessageStatus
 
     /// <summary>The run was aborted by the user.</summary>
     Aborted
+}
+
+public enum ChatMessageAction
+{
+    Copy,
+    ReadAloud,
+    Delete
+}
+
+public sealed class ChatMessageActionEventArgs : EventArgs
+{
+    public required ChatMessage Message { get; init; }
+    public required ChatMessageAction Action { get; init; }
 }

@@ -31,6 +31,12 @@ public interface IChatService
 
     /// <summary>Fired when a tool call event arrives (start, result, error).</summary>
     event EventHandler<ChatToolCallEvent>? ToolCallReceived;
+
+    /// <summary>Fired when reasoning/thinking text arrives from the model.</summary>
+    event EventHandler<ChatReasoningEvent>? ReasoningReceived;
+
+    /// <summary>Fired when a status event occurs (info, warning, error notifications).</summary>
+    event EventHandler<ChatStatusEvent>? StatusReceived;
 }
 
 /// <summary>A streaming text delta for an active agent run.</summary>
@@ -46,6 +52,10 @@ public sealed class ChatLifecycleEvent : EventArgs
     public required string RunId { get; init; }
     public required ChatLifecyclePhase Phase { get; init; }
     public string? ErrorMessage { get; init; }
+    public string? Model { get; init; }
+    public int? InputTokens { get; init; }
+    public int? OutputTokens { get; init; }
+    public int? ContextPercent { get; init; }
 }
 
 public enum ChatLifecyclePhase
@@ -63,4 +73,22 @@ public sealed class ChatToolCallEvent : EventArgs
     public required string ToolName { get; init; }
     public required ToolCallPhase Phase { get; init; }
     public string? ResultSummary { get; init; }
+    public string? ArgsJson { get; init; }
+    public string? ToolOutput { get; init; }
+}
+
+/// <summary>A reasoning/thinking text delta from the model.</summary>
+public sealed class ChatReasoningEvent : EventArgs
+{
+    public required string RunId { get; init; }
+    public required string Delta { get; init; }
+    public bool IsFinal { get; init; }
+}
+
+/// <summary>A status notification event.</summary>
+public sealed class ChatStatusEvent : EventArgs
+{
+    public required string RunId { get; init; }
+    public required string Text { get; init; }
+    public required ChatTone Tone { get; init; }
 }

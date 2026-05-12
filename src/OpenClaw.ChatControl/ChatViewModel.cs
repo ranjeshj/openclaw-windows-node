@@ -37,6 +37,8 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         _service.DeltaReceived += OnDeltaReceived;
         _service.LifecycleChanged += OnLifecycleChanged;
         _service.ToolCallReceived += OnToolCallReceived;
+        _service.ReasoningReceived += OnReasoningReceived;
+        _service.StatusReceived += OnStatusReceived;
     }
 
     /// <summary>All messages in the current session.</summary>
@@ -241,15 +243,18 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
                 switch (e.Phase)
                 {
                     case ChatLifecyclePhase.Start:
-                        // If we already have a streaming message for this run, update it
                         if (_activeStreamingMessage != null && _activeStreamingMessage.RunId == e.RunId)
                         {
-                            // Already set up — this is a no-op
+                            // Already set up
                         }
                         else if (_activeStreamingMessage != null && _activeStreamingMessage.Status == MessageStatus.Thinking)
                         {
-                            // Associate the run ID with the waiting message
                             _activeStreamingMessage.RunId = e.RunId;
+                        }
+                        // Capture model name from lifecycle start
+                        if (_activeStreamingMessage != null && !string.IsNullOrEmpty(e.Model))
+                        {
+                            _activeStreamingMessage.ModelName = e.Model;
                         }
                         break;
 
@@ -257,6 +262,12 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
                         if (_activeStreamingMessage != null &&
                             (_activeStreamingMessage.RunId == e.RunId || ActiveRunId == e.RunId))
                         {
+                            // Capture token usage from lifecycle end
+                            if (e.InputTokens.HasValue) _activeStreamingMessage.InputTokens = e.InputTokens;
+                            if (e.OutputTokens.HasValue) _activeStreamingMessage.OutputTokens = e.OutputTokens;
+                            if (e.ContextPercent.HasValue) _activeStreamingMessage.ContextPercent = e.ContextPercent;
+                            if (!string.IsNullOrEmpty(e.Model)) _activeStreamingMessage.ModelName = e.Model;
+
                             _activeStreamingMessage.FinalizeContent();
                             _activeStreamingMessage = null;
                             ActiveRunId = null;
@@ -291,22 +302,52 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
 
                 if (e.Phase == ToolCallPhase.Running)
                 {
-                    _activeStreamingMessage.ToolCalls.Add(new ToolCallInfo(e.ToolCallId, e.ToolName));
+                    var tc = new ToolCallInfo(e.ToolCallId, e.ToolName);
+                    if (!string.IsNullOrEmpty(e.ArgsJson)) tc.ArgsJson = e.ArgsJson;
+                    _activeStreamingMessage.ToolCalls.Add(tc);
                 }
                 else
                 {
-                    // Find existing tool call and update it
                     foreach (var tc in _activeStreamingMessage.ToolCalls)
                     {
                         if (tc.ToolCallId == e.ToolCallId)
                         {
                             tc.Phase = e.Phase;
                             tc.ResultSummary = e.ResultSummary;
+                            if (!string.IsNullOrEmpty(e.ToolOutput)) tc.ToolOutput = e.ToolOutput;
                             break;
                         }
                     }
                 }
             }
+        });
+    }
+
+    private void OnReasoningReceived(object? sender, ChatReasoningEvent e)
+    {
+        _dispatchToUI(() =>
+        {
+            lock (_streamLock)
+            {
+                if (_activeStreamingMessage == null ||
+                    (_activeStreamingMessage.RunId != e.RunId && ActiveRunId != e.RunId))
+                    return;
+
+                _activeStreamingMessage.AppendReasoning(e.Delta);
+            }
+        });
+    }
+
+    private void OnStatusReceived(object? sender, ChatStatusEvent e)
+    {
+        _dispatchToUI(() =>
+        {
+            var statusMsg = new ChatMessage(
+                id: Guid.NewGuid().ToString("N"),
+                role: MessageRole.Status,
+                content: e.Text);
+            statusMsg.Tone = e.Tone;
+            Messages.Add(statusMsg);
         });
     }
 
@@ -318,6 +359,8 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         _service.DeltaReceived -= OnDeltaReceived;
         _service.LifecycleChanged -= OnLifecycleChanged;
         _service.ToolCallReceived -= OnToolCallReceived;
+        _service.ReasoningReceived -= OnReasoningReceived;
+        _service.StatusReceived -= OnStatusReceived;
 
         _sessionCts?.Cancel();
         _sessionCts?.Dispose();

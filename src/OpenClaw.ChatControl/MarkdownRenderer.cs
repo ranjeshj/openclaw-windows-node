@@ -27,8 +27,8 @@ public static class MarkdownRenderer
 
     /// <summary>
     /// Render markdown content into a UIElement suitable for display.
-    /// Returns a RichTextBlock with formatted content for completed messages,
-    /// or a simple TextBlock for empty/trivial content.
+    /// Returns a StackPanel containing RichTextBlocks for text and
+    /// Border-wrapped code blocks for fenced code.
     /// </summary>
     public static FrameworkElement Render(string content)
     {
@@ -39,23 +39,75 @@ public static class MarkdownRenderer
 
         try
         {
-            var document = Markdown.Parse(content, s_pipeline);
-            var richTextBlock = new RichTextBlock
+            // Security: pre-sanitize to neutralize images, links, and HTML
+            var sanitized = ChatMarkdownSanitizer.Sanitize(content);
+            var document = Markdown.Parse(sanitized, s_pipeline);
+
+            // Check if there are any fenced code blocks — if so, we need a StackPanel
+            // container to interleave RichTextBlocks with styled code block Borders.
+            bool hasFencedCode = false;
+            foreach (var block in document)
             {
-                TextWrapping = TextWrapping.Wrap,
-                IsTextSelectionEnabled = true,
-            };
+                if (block is FencedCodeBlock) { hasFencedCode = true; break; }
+            }
+
+            if (!hasFencedCode)
+            {
+                // Simple case: all inline content, single RichTextBlock
+                var richTextBlock = new RichTextBlock
+                {
+                    TextWrapping = TextWrapping.Wrap,
+                    IsTextSelectionEnabled = true,
+                };
+                foreach (var block in document)
+                    RenderBlock(block, richTextBlock);
+                return richTextBlock;
+            }
+
+            // Complex case: interleave text and code block cards
+            var container = new StackPanel { Spacing = 4 };
+            RichTextBlock? currentRtb = null;
+
+            void FlushCurrentRtb()
+            {
+                if (currentRtb != null && currentRtb.Blocks.Count > 0)
+                {
+                    container.Children.Add(currentRtb);
+                    currentRtb = null;
+                }
+            }
+
+            RichTextBlock EnsureRtb()
+            {
+                if (currentRtb == null)
+                {
+                    currentRtb = new RichTextBlock
+                    {
+                        TextWrapping = TextWrapping.Wrap,
+                        IsTextSelectionEnabled = true,
+                    };
+                }
+                return currentRtb;
+            }
 
             foreach (var block in document)
             {
-                RenderBlock(block, richTextBlock);
+                if (block is FencedCodeBlock fenced)
+                {
+                    FlushCurrentRtb();
+                    container.Children.Add(RenderCodeBlockCard(fenced));
+                }
+                else
+                {
+                    RenderBlock(block, EnsureRtb());
+                }
             }
+            FlushCurrentRtb();
 
-            return richTextBlock;
+            return container;
         }
         catch
         {
-            // Fallback to plain text on any parse/render error
             return new TextBlock
             {
                 Text = content,
@@ -249,7 +301,6 @@ public static class MarkdownRenderer
         var language = (codeBlock as FencedCodeBlock)?.Info ?? "";
         var code = ExtractText(codeBlock);
 
-        // Build a code block paragraph with monospace font and background
         var codePara = new Paragraph
         {
             FontFamily = new FontFamily("Cascadia Code, Cascadia Mono, Consolas, monospace"),
@@ -257,7 +308,6 @@ public static class MarkdownRenderer
             LineStackingStrategy = LineStackingStrategy.MaxHeight,
         };
 
-        // Language label
         if (!string.IsNullOrEmpty(language))
         {
             codePara.Inlines.Add(new Run
@@ -272,6 +322,64 @@ public static class MarkdownRenderer
 
         codePara.Inlines.Add(new Run { Text = code.TrimEnd() });
         target.Blocks.Add(codePara);
+    }
+
+    /// <summary>
+    /// Renders a fenced code block as a styled Border card with language header,
+    /// rounded corners, and card background — matching Fluent design.
+    /// </summary>
+    private static FrameworkElement RenderCodeBlockCard(FencedCodeBlock fenced)
+    {
+        var language = fenced.Info ?? "";
+        var code = ExtractText(fenced).TrimEnd();
+
+        var stack = new StackPanel();
+
+        // Language label header
+        if (!string.IsNullOrEmpty(language))
+        {
+            stack.Children.Add(new TextBlock
+            {
+                Text = language,
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = GetSecondaryBrush(),
+                Padding = new Thickness(12, 6, 12, 0),
+            });
+        }
+
+        // Code text
+        stack.Children.Add(new TextBlock
+        {
+            Text = code,
+            FontFamily = new FontFamily("Cascadia Code, Cascadia Mono, Consolas, monospace"),
+            FontSize = 13,
+            TextWrapping = TextWrapping.Wrap,
+            IsTextSelectionEnabled = true,
+            Padding = new Thickness(12, 8, 12, 12),
+        });
+
+        return new Border
+        {
+            Child = stack,
+            CornerRadius = new CornerRadius(8),
+            BorderThickness = new Thickness(1),
+            Margin = new Thickness(0, 4, 0, 4),
+            // Use theme-aware resources when available, fall back to reasonable defaults
+            Background = GetCodeBlockBackground(),
+            BorderBrush = GetSecondaryBrush(),
+        };
+    }
+
+    private static SolidColorBrush GetCodeBlockBackground()
+    {
+        try
+        {
+            if (Application.Current.Resources.TryGetValue("CardBackgroundFillColorDefaultBrush", out var brush) && brush is SolidColorBrush scb)
+                return scb;
+        }
+        catch { }
+        return new SolidColorBrush(Windows.UI.Color.FromArgb(20, 128, 128, 128));
     }
 
     private static void RenderList(ListBlock list, RichTextBlock target, int depth)

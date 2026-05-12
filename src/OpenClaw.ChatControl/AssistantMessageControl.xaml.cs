@@ -58,6 +58,11 @@ public sealed partial class AssistantMessageControl : UserControl
             case nameof(ChatMessage.IsStreaming):
                 UpdateVisualState();
                 break;
+
+            case nameof(ChatMessage.HasReasoning):
+            case nameof(ChatMessage.ReasoningContent):
+                UpdateReasoningVisibility();
+                break;
         }
     }
 
@@ -90,6 +95,7 @@ public sealed partial class AssistantMessageControl : UserControl
         StreamingText.Visibility = Visibility.Collapsed;
         RenderedContent.Visibility = Visibility.Collapsed;
         ErrorPanel.Visibility = Visibility.Collapsed;
+        MetadataFooterText.Visibility = Visibility.Collapsed;
 
         switch (_message.Status)
         {
@@ -104,16 +110,17 @@ public sealed partial class AssistantMessageControl : UserControl
 
             case MessageStatus.Complete:
                 RenderMarkdown();
+                ShowMetadataFooter();
                 break;
 
             case MessageStatus.Error:
-                // Show partial content + error
                 if (!string.IsNullOrEmpty(_message.Content))
                 {
                     RenderMarkdown();
                 }
                 ErrorPanel.Visibility = Visibility.Visible;
                 ErrorText.Text = "Error";
+                ShowMetadataFooter();
                 break;
 
             case MessageStatus.Aborted:
@@ -123,16 +130,42 @@ public sealed partial class AssistantMessageControl : UserControl
                 }
                 ErrorPanel.Visibility = Visibility.Visible;
                 ErrorText.Text = "Stopped";
+                ShowMetadataFooter();
                 break;
 
             default:
-                // Sending or other — show content as text
                 if (!string.IsNullOrEmpty(_message.Content))
                 {
                     StreamingText.Text = _message.Content;
                     StreamingText.Visibility = Visibility.Visible;
                 }
                 break;
+        }
+
+        UpdateReasoningVisibility();
+    }
+
+    private void UpdateReasoningVisibility()
+    {
+        if (_message?.HasReasoning == true && !string.IsNullOrEmpty(_message.ReasoningContent))
+        {
+            ReasoningPanel.ReasoningText = _message.ReasoningContent;
+            ReasoningPanel.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            ReasoningPanel.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void ShowMetadataFooter()
+    {
+        if (_message == null) return;
+        var footer = _message.MetadataFooter;
+        if (!string.IsNullOrEmpty(footer))
+        {
+            MetadataFooterText.Text = footer;
+            MetadataFooterText.Visibility = Visibility.Visible;
         }
     }
 

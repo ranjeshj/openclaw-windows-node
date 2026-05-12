@@ -29,6 +29,10 @@ public sealed class MockChatService : IChatService
     public event EventHandler<ChatStreamDelta>? DeltaReceived;
     public event EventHandler<ChatLifecycleEvent>? LifecycleChanged;
     public event EventHandler<ChatToolCallEvent>? ToolCallReceived;
+    public event EventHandler<ChatReasoningEvent>? ReasoningReceived;
+#pragma warning disable CS0067 // Event never used — required by IChatService interface
+    public event EventHandler<ChatStatusEvent>? StatusReceived;
+#pragma warning restore CS0067
 
     public Task<IReadOnlyList<ChatMessage>> LoadHistoryAsync(CancellationToken ct = default)
     {
@@ -73,17 +77,26 @@ public sealed class MockChatService : IChatService
                 LifecycleChanged?.Invoke(this, new ChatLifecycleEvent
                 {
                     RunId = runId,
-                    Phase = ChatLifecyclePhase.Start
+                    Phase = ChatLifecyclePhase.Start,
+                    Model = "gpt-5.5"
                 });
 
-                // Simulate a tool call before the text response
+                // Simulate reasoning before the response
+                ReasoningReceived?.Invoke(this, new ChatReasoningEvent
+                {
+                    RunId = runId,
+                    Delta = "Let me think about this... I should consider the user's question carefully and provide a helpful response."
+                });
+
+                // Simulate a tool call with args and output
                 var toolCallId = $"tool-{runId}-1";
                 ToolCallReceived?.Invoke(this, new ChatToolCallEvent
                 {
                     RunId = runId,
                     ToolCallId = toolCallId,
                     ToolName = "read",
-                    Phase = ToolCallPhase.Running
+                    Phase = ToolCallPhase.Running,
+                    ArgsJson = "{\n  \"path\": \"src/main.cs\",\n  \"lines\": \"1-42\"\n}"
                 });
 
                 await Task.Delay(Math.Max(ThinkingDelayMs / 2, 10), ct);
@@ -94,7 +107,8 @@ public sealed class MockChatService : IChatService
                     ToolCallId = toolCallId,
                     ToolName = "read",
                     Phase = ToolCallPhase.Done,
-                    ResultSummary = "Read 42 lines from main.cs"
+                    ResultSummary = "Read 42 lines from main.cs",
+                    ToolOutput = "using System;\nnamespace MyApp;\n\npublic class Program\n{\n    static void Main() => Console.WriteLine(\"Hello\");\n}"
                 });
 
                 var response = GenerateResponse(text);
@@ -129,7 +143,11 @@ public sealed class MockChatService : IChatService
                 LifecycleChanged?.Invoke(this, new ChatLifecycleEvent
                 {
                     RunId = runId,
-                    Phase = ChatLifecyclePhase.End
+                    Phase = ChatLifecyclePhase.End,
+                    Model = "gpt-5.5",
+                    InputTokens = 1475,
+                    OutputTokens = 42,
+                    ContextPercent = 23
                 });
             }
             catch (OperationCanceledException) { }

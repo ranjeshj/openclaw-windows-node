@@ -99,7 +99,6 @@ public class ChatMessageTests
     [Fact]
     public void StatusEnum_HasExpectedValues()
     {
-        // Ensure all lifecycle states exist
         Assert.Equal(6, Enum.GetValues<MessageStatus>().Length);
         _ = MessageStatus.Sending;
         _ = MessageStatus.Thinking;
@@ -107,5 +106,64 @@ public class ChatMessageTests
         _ = MessageStatus.Complete;
         _ = MessageStatus.Error;
         _ = MessageStatus.Aborted;
+    }
+
+    [Fact]
+    public void MetadataFooter_ShowsAvailableFields()
+    {
+        var msg = new ChatMessage("msg-1", MessageRole.Assistant, "test");
+        msg.SenderLabel = "Field";
+        msg.ModelName = "gpt-5.5";
+        msg.InputTokens = 1500;
+        msg.OutputTokens = 42;
+
+        var footer = msg.MetadataFooter;
+        Assert.Contains("Field", footer);
+        Assert.Contains("gpt-5.5", footer);
+        Assert.Contains("↑1.5k", footer);
+        Assert.Contains("↓42", footer);
+    }
+
+    [Fact]
+    public void MetadataFooter_SkipsMissingFields()
+    {
+        var msg = new ChatMessage("msg-1", MessageRole.Assistant, "test");
+        var footer = msg.MetadataFooter;
+        // Should just contain the timestamp
+        Assert.DoesNotContain("·", footer.Replace(msg.FormattedTime, "").Trim());
+    }
+
+    [Fact]
+    public void AppendReasoning_AccumulatesContent()
+    {
+        var msg = new ChatMessage("msg-1", MessageRole.Assistant);
+        msg.AppendReasoning("Think about ");
+        msg.AppendReasoning("the problem.");
+
+        Assert.Equal("Think about the problem.", msg.ReasoningContent);
+        Assert.True(msg.HasReasoning);
+    }
+
+    [Fact]
+    public void ToolCalls_Collection_Exists()
+    {
+        var msg = new ChatMessage("msg-1", MessageRole.Assistant);
+        Assert.NotNull(msg.ToolCalls);
+        Assert.Empty(msg.ToolCalls);
+    }
+
+    [Fact]
+    public void Tone_Property_Works()
+    {
+        var msg = new ChatMessage("msg-1", MessageRole.Status, "Connected");
+        msg.Tone = ChatTone.Success;
+        Assert.Equal(ChatTone.Success, msg.Tone);
+    }
+
+    [Fact]
+    public void MessageRole_IncludesStatus()
+    {
+        Assert.Equal(4, Enum.GetValues<MessageRole>().Length);
+        _ = MessageRole.Status;
     }
 }

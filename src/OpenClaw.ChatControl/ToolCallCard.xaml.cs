@@ -6,13 +6,14 @@ namespace OpenClaw.ChatControl;
 
 /// <summary>
 /// Renders a single tool call as a compact expandable card.
-/// Collapsed: "⏳ tool_name" (running) or "✅ tool_name" (done).
-/// Expanded: shows result summary text.
+/// Header: tool-specific icon + capitalized name + status.
+/// Two independently expandable sections: args (JSON) and output.
 /// </summary>
 public sealed partial class ToolCallCard : UserControl
 {
     private ToolCallInfo? _toolCall;
-    private bool _isExpanded;
+    private bool _argsExpanded;
+    private bool _outputExpanded;
 
     public ToolCallCard()
     {
@@ -26,6 +27,8 @@ public sealed partial class ToolCallCard : UserControl
             _toolCall.PropertyChanged -= OnToolCallPropertyChanged;
 
         _toolCall = args.NewValue as ToolCallInfo;
+        _argsExpanded = false;
+        _outputExpanded = false;
 
         if (_toolCall != null)
         {
@@ -49,29 +52,47 @@ public sealed partial class ToolCallCard : UserControl
         RunningSpinner.Visibility = _toolCall.Phase == ToolCallPhase.Running
             ? Visibility.Visible : Visibility.Collapsed;
 
-        // Show expand button only when there's a result to show
-        ExpandButton.Visibility = !string.IsNullOrEmpty(_toolCall.ResultSummary)
-            ? Visibility.Visible : Visibility.Collapsed;
-
-        // Hide spinner when not running
         if (_toolCall.Phase != ToolCallPhase.Running)
             RunningSpinner.Visibility = Visibility.Collapsed;
+
+        // Show args expand button when args are available
+        ExpandArgsButton.Visibility = !string.IsNullOrEmpty(_toolCall.ArgsJson)
+            ? Visibility.Visible : Visibility.Collapsed;
+
+        // Show output expand button when output or result is available
+        ExpandOutputButton.Visibility = (!string.IsNullOrEmpty(_toolCall.ToolOutput) || !string.IsNullOrEmpty(_toolCall.ResultSummary))
+            ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void OnExpandClick(object sender, RoutedEventArgs e)
+    private void OnExpandArgsClick(object sender, RoutedEventArgs e)
     {
-        _isExpanded = !_isExpanded;
-
-        if (_isExpanded && _toolCall?.ResultSummary != null)
+        _argsExpanded = !_argsExpanded;
+        if (_argsExpanded && _toolCall?.ArgsJson != null)
         {
-            ResultText.Text = _toolCall.ResultSummary;
-            ResultText.Visibility = Visibility.Visible;
-            ExpandIcon.Glyph = "\uE70D"; // ChevronDown
+            ArgsText.Text = _toolCall.ArgsJson;
+            ArgsSection.Visibility = Visibility.Visible;
+            ExpandArgsIcon.Glyph = "\uE70D"; // ChevronDown
         }
         else
         {
-            ResultText.Visibility = Visibility.Collapsed;
-            ExpandIcon.Glyph = "\uE76C"; // ChevronRight
+            ArgsSection.Visibility = Visibility.Collapsed;
+            ExpandArgsIcon.Glyph = "\uE76C"; // ChevronRight
+        }
+    }
+
+    private void OnExpandOutputClick(object sender, RoutedEventArgs e)
+    {
+        _outputExpanded = !_outputExpanded;
+        if (_outputExpanded && _toolCall != null)
+        {
+            OutputText.Text = _toolCall.ToolOutput ?? _toolCall.ResultSummary ?? "";
+            OutputSection.Visibility = Visibility.Visible;
+            ExpandOutputIcon.Glyph = "\uE70D";
+        }
+        else
+        {
+            OutputSection.Visibility = Visibility.Collapsed;
+            ExpandOutputIcon.Glyph = "\uE7B8";
         }
     }
 }
