@@ -19,6 +19,12 @@ public sealed partial class ChatInputBox : UserControl
     /// <summary>Fired when the user requests to abort the active run.</summary>
     public event EventHandler? AbortRequested;
 
+    /// <summary>Fired when the user clicks "New Chat" in the more menu.</summary>
+    public event EventHandler? NewChatRequested;
+
+    /// <summary>Fired when the user clicks "Copy Last Response" in the more menu.</summary>
+    public event EventHandler? CopyLastResponseRequested;
+
     /// <summary>
     /// Whether an agent run is currently active.
     /// Toggles between Send and Stop button visibility.
@@ -99,5 +105,15 @@ public sealed partial class ChatInputBox : UserControl
     private void UpdateSendEnabled()
     {
         SendButton.IsEnabled = !string.IsNullOrWhiteSpace(InputTextBox.Text) && !_isRunActive;
+    }
+
+    private void OnNewChatClick(object sender, RoutedEventArgs e)
+    {
+        NewChatRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnCopyLastResponseClick(object sender, RoutedEventArgs e)
+    {
+        CopyLastResponseRequested?.Invoke(this, EventArgs.Empty);
     }
 }

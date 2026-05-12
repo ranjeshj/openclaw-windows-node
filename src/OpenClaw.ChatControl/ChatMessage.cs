@@ -1,4 +1,5 @@
 using System;
+using System.Collections.ObjectModel;
 using System.Text;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.UI.Xaml;
@@ -46,6 +47,9 @@ public partial class ChatMessage : ObservableObject
 
     /// <summary>Run ID associated with this message (for assistant messages during a run).</summary>
     public string? RunId { get; set; }
+
+    /// <summary>Tool calls made during this assistant message's run.</summary>
+    public ObservableCollection<ToolCallInfo> ToolCalls { get; } = new();
 
     // Efficient delta accumulation during streaming
     private readonly StringBuilder _contentBuffer = new();

@@ -773,7 +773,7 @@ public class OpenClawGatewayClient : WebSocketClientBase, IOperatorGatewayClient
                 },
                 role,
                 scopes = requestedScopes,
-                caps = Array.Empty<string>(),
+                caps = new[] { "tool-events" },
                 commands = Array.Empty<string>(),
                 permissions = new { },
                 auth = BuildAuthPayload(),

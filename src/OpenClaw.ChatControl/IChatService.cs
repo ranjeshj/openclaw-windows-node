@@ -28,6 +28,9 @@ public interface IChatService
 
     /// <summary>Fired when a run lifecycle event occurs (start, end, error).</summary>
     event EventHandler<ChatLifecycleEvent>? LifecycleChanged;
+
+    /// <summary>Fired when a tool call event arrives (start, result, error).</summary>
+    event EventHandler<ChatToolCallEvent>? ToolCallReceived;
 }
 
 /// <summary>A streaming text delta for an active agent run.</summary>
@@ -50,4 +53,14 @@ public enum ChatLifecyclePhase
     Start,
     End,
     Error
+}
+
+/// <summary>A tool call event within an agent run.</summary>
+public sealed class ChatToolCallEvent : EventArgs
+{
+    public required string RunId { get; init; }
+    public required string ToolCallId { get; init; }
+    public required string ToolName { get; init; }
+    public required ToolCallPhase Phase { get; init; }
+    public string? ResultSummary { get; init; }
 }

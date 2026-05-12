@@ -27,6 +27,7 @@ public sealed class GatewayChatService : IChatService, IDisposable
 
     public event EventHandler<ChatStreamDelta>? DeltaReceived;
     public event EventHandler<ChatLifecycleEvent>? LifecycleChanged;
+    public event EventHandler<ChatToolCallEvent>? ToolCallReceived;
 
     public async Task<IReadOnlyList<ChatMessage>> LoadHistoryAsync(CancellationToken ct = default)
     {
@@ -127,6 +128,14 @@ public sealed class GatewayChatService : IChatService, IDisposable
                         });
                     }
                     break;
+
+                case "tool":
+                    var toolEvent = ExtractToolCallEvent(evt);
+                    if (toolEvent != null)
+                    {
+                        ToolCallReceived?.Invoke(this, toolEvent);
+                    }
+                    break;
             }
         }
         catch (Exception ex)
@@ -189,6 +198,71 @@ public sealed class GatewayChatService : IChatService, IDisposable
                 return msg.GetString();
         }
         return "Agent run failed";
+    }
+
+    private static ChatToolCallEvent? ExtractToolCallEvent(AgentEventInfo evt)
+    {
+        if (evt.Data.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var name = evt.Data.TryGetProperty("name", out var nameProp) ? nameProp.GetString() : null;
+        var toolCallId = evt.Data.TryGetProperty("toolCallId", out var tcIdProp) ? tcIdProp.GetString() : null;
+        var phaseStr = evt.Data.TryGetProperty("phase", out var phaseProp) ? phaseProp.GetString() : null;
+
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(toolCallId) || string.IsNullOrEmpty(phaseStr))
+            return null;
+
+        var phase = phaseStr.ToLowerInvariant() switch
+        {
+            "start" => ToolCallPhase.Running,
+            "result" or "done" => ToolCallPhase.Done,
+            "error" => ToolCallPhase.Error,
+            _ => (ToolCallPhase?)null
+        };
+
+        if (phase == null)
+            return null;
+
+        string? resultSummary = null;
+        if (phase == ToolCallPhase.Done && evt.Data.TryGetProperty("result", out var result))
+        {
+            resultSummary = ExtractToolResultSummary(result);
+        }
+
+        return new ChatToolCallEvent
+        {
+            RunId = evt.RunId,
+            ToolCallId = toolCallId,
+            ToolName = name,
+            Phase = phase.Value,
+            ResultSummary = resultSummary
+        };
+    }
+
+    private static string? ExtractToolResultSummary(JsonElement result)
+    {
+        // Result can be { content: [{ type: "text", text: "..." }] } or a string
+        if (result.ValueKind == JsonValueKind.String)
+            return TruncateSummary(result.GetString());
+
+        if (result.ValueKind == JsonValueKind.Object &&
+            result.TryGetProperty("content", out var content) &&
+            content.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in content.EnumerateArray())
+            {
+                if (item.TryGetProperty("text", out var text))
+                    return TruncateSummary(text.GetString());
+            }
+        }
+
+        return null;
+    }
+
+    private static string? TruncateSummary(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return null;
+        return text.Length > 200 ? text[..200] + "..." : text;
     }
 
     public void Dispose()

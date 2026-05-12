@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
@@ -11,7 +12,9 @@ public sealed partial class ChatPanel : UserControl
     private bool _emptyStateHidden;
     private ChatMessage? _trackedStreamingMessage;
     private bool _scrollPending;
-    private bool _isProgrammaticScroll;
+    private int _programmaticScrollGen;
+    private int _lastSeenScrollGen;
+    private DispatcherQueueTimer? _scrollThrottleTimer;
 
     /// <summary>Fired when the user clicks the close button in the header.</summary>
     public event EventHandler? CloseRequested;
@@ -176,6 +179,32 @@ public sealed partial class ChatPanel : UserControl
         ViewModel?.AbortCommand.Execute(null);
     }
 
+    private void OnNewChatRequested(object sender, EventArgs e)
+    {
+        // Send /new through the normal send flow
+        _autoScrollEnabled = true;
+        ScrollToBottomButton.Visibility = Visibility.Collapsed;
+        ViewModel?.SendCommand.Execute("/new");
+    }
+
+    private void OnCopyLastResponseRequested(object sender, EventArgs e)
+    {
+        if (ViewModel?.Messages == null) return;
+
+        // Find the last assistant message
+        for (int i = ViewModel.Messages.Count - 1; i >= 0; i--)
+        {
+            if (ViewModel.Messages[i].Role == MessageRole.Assistant &&
+                !string.IsNullOrEmpty(ViewModel.Messages[i].Content))
+            {
+                var dp = new Windows.ApplicationModel.DataTransfer.DataPackage();
+                dp.SetText(ViewModel.Messages[i].Content);
+                Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(dp);
+                break;
+            }
+        }
+    }
+
     private void OnCloseClick(object sender, RoutedEventArgs e)
     {
         CloseRequested?.Invoke(this, EventArgs.Empty);
@@ -194,24 +223,59 @@ public sealed partial class ChatPanel : UserControl
     }
 
     /// <summary>
-    /// Coalesce rapid scroll requests into a single deferred scroll.
-    /// Prevents jitter from many streaming deltas queuing independent scrolls.
+    /// Request a scroll-to-bottom. During streaming, requests are coalesced
+    /// via a 100ms throttle timer so we scroll only after layout settles.
     /// </summary>
     private void RequestScrollToBottom()
     {
         if (_scrollPending) return;
         _scrollPending = true;
-        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
-        {
-            _scrollPending = false;
-            if (_autoScrollEnabled)
-                ScrollToBottom();
-        });
+
+        // Use a timer to let the layout pass complete before reading ScrollableHeight.
+        // This avoids jitter from ChangeView firing before ItemsRepeater finishes layout.
+        EnsureScrollTimer();
+        if (!_scrollThrottleTimer!.IsRunning)
+            _scrollThrottleTimer.Start();
+    }
+
+    private void EnsureScrollTimer()
+    {
+        if (_scrollThrottleTimer != null) return;
+        _scrollThrottleTimer = DispatcherQueue.CreateTimer();
+        _scrollThrottleTimer.Interval = TimeSpan.FromMilliseconds(100);
+        _scrollThrottleTimer.IsRepeating = false;
+        _scrollThrottleTimer.Tick += OnScrollThrottleTick;
+    }
+
+    private void OnScrollThrottleTick(DispatcherQueueTimer sender, object args)
+    {
+        _scrollPending = false;
+        if (_autoScrollEnabled)
+            ScrollToBottom();
     }
 
     private void ScrollToBottom()
     {
-        _isProgrammaticScroll = true;
+        _programmaticScrollGen++;
+
+        // Try BringIntoView on the last realized element — this lets WinUI
+        // compute the correct scroll offset after layout, avoiding stale ScrollableHeight.
+        var count = ViewModel?.Messages.Count ?? 0;
+        if (count > 0)
+        {
+            var lastElement = MessageList.TryGetElement(count - 1);
+            if (lastElement is UIElement el)
+            {
+                el.StartBringIntoView(new BringIntoViewOptions
+                {
+                    AnimationDesired = false,
+                    VerticalAlignmentRatio = 1.0, // align bottom
+                });
+                return;
+            }
+        }
+
+        // Fallback: direct ChangeView (element not realized or no messages)
         MessageScrollViewer.ChangeView(null, MessageScrollViewer.ScrollableHeight, null, disableAnimation: true);
     }
 
@@ -222,11 +286,12 @@ public sealed partial class ChatPanel : UserControl
 
     private void OnScrollViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
-        // Ignore events from our own programmatic scrolls
-        if (_isProgrammaticScroll)
+        // Ignore events from our own programmatic scrolls (generation-based tracking).
+        // _lastSeenScrollGen catches up to _programmaticScrollGen as ViewChanged fires.
+        if (_lastSeenScrollGen < _programmaticScrollGen)
         {
             if (!e.IsIntermediate)
-                _isProgrammaticScroll = false;
+                _lastSeenScrollGen = _programmaticScrollGen;
             return;
         }
 

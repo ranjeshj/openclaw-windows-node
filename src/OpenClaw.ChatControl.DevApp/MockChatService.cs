@@ -28,6 +28,7 @@ public sealed class MockChatService : IChatService
 
     public event EventHandler<ChatStreamDelta>? DeltaReceived;
     public event EventHandler<ChatLifecycleEvent>? LifecycleChanged;
+    public event EventHandler<ChatToolCallEvent>? ToolCallReceived;
 
     public Task<IReadOnlyList<ChatMessage>> LoadHistoryAsync(CancellationToken ct = default)
     {
@@ -73,6 +74,27 @@ public sealed class MockChatService : IChatService
                 {
                     RunId = runId,
                     Phase = ChatLifecyclePhase.Start
+                });
+
+                // Simulate a tool call before the text response
+                var toolCallId = $"tool-{runId}-1";
+                ToolCallReceived?.Invoke(this, new ChatToolCallEvent
+                {
+                    RunId = runId,
+                    ToolCallId = toolCallId,
+                    ToolName = "read",
+                    Phase = ToolCallPhase.Running
+                });
+
+                await Task.Delay(Math.Max(ThinkingDelayMs / 2, 10), ct);
+
+                ToolCallReceived?.Invoke(this, new ChatToolCallEvent
+                {
+                    RunId = runId,
+                    ToolCallId = toolCallId,
+                    ToolName = "read",
+                    Phase = ToolCallPhase.Done,
+                    ResultSummary = "Read 42 lines from main.cs"
                 });
 
                 var response = GenerateResponse(text);

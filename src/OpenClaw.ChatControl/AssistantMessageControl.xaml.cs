@@ -1,3 +1,4 @@
+using System.Collections.Specialized;
 using System.ComponentModel;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -8,6 +9,7 @@ namespace OpenClaw.ChatControl;
 /// Renders an assistant message with two-phase rendering:
 /// - During streaming: plain TextBlock (fast, no re-parse overhead)
 /// - After completion: rendered markdown via MarkdownRenderer (Markdig → RichTextBlock)
+/// Also renders inline tool call cards as they arrive.
 /// </summary>
 public sealed partial class AssistantMessageControl : UserControl
 {
@@ -26,6 +28,7 @@ public sealed partial class AssistantMessageControl : UserControl
         if (_message != null)
         {
             _message.PropertyChanged -= OnMessagePropertyChanged;
+            _message.ToolCalls.CollectionChanged -= OnToolCallsChanged;
         }
 
         _message = args.NewValue as ChatMessage;
@@ -34,6 +37,8 @@ public sealed partial class AssistantMessageControl : UserControl
         if (_message != null)
         {
             _message.PropertyChanged += OnMessagePropertyChanged;
+            _message.ToolCalls.CollectionChanged += OnToolCallsChanged;
+            UpdateToolCallsVisibility();
             UpdateVisualState();
         }
     }
@@ -45,7 +50,6 @@ public sealed partial class AssistantMessageControl : UserControl
             case nameof(ChatMessage.Content):
                 if (_message?.IsStreaming == true)
                 {
-                    // During streaming: update plain text only
                     StreamingText.Text = _message.Content;
                 }
                 break;
@@ -54,6 +58,26 @@ public sealed partial class AssistantMessageControl : UserControl
             case nameof(ChatMessage.IsStreaming):
                 UpdateVisualState();
                 break;
+        }
+    }
+
+    private void OnToolCallsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        UpdateToolCallsVisibility();
+    }
+
+    private void UpdateToolCallsVisibility()
+    {
+        if (_message == null) return;
+
+        if (_message.ToolCalls.Count > 0)
+        {
+            ToolCallsList.ItemsSource = _message.ToolCalls;
+            ToolCallsList.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            ToolCallsList.Visibility = Visibility.Collapsed;
         }
     }
 

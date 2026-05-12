@@ -499,6 +499,12 @@ public partial class App : Application
             // Window is created but hidden — WebView2 initializes in the background
         }
 
+        // Pre-warm native chat window (instant show on tray click)
+        if (_settings?.EnableNativeChatDev == true)
+        {
+            _nativeChatWindow = new Windows.NativeChatWindow();
+        }
+
         // Start deep link server
         StartDeepLinkServer();
 
@@ -630,6 +636,7 @@ public partial class App : Application
     }
 
     private Windows.NativeChatWindow? _nativeChatWindow;
+    private IOperatorGatewayClient? _nativeChatLastClient;
     private void ShowNativeChatWindow()
     {
         try
@@ -643,12 +650,18 @@ public partial class App : Application
                 return;
             }
 
-            if (_nativeChatWindow == null)
+            if (_nativeChatWindow == null || _nativeChatWindow.IsClosed)
             {
                 _nativeChatWindow = new Windows.NativeChatWindow();
+                _nativeChatLastClient = null;
             }
 
-            _nativeChatWindow.Initialize(operatorClient);
+            // Only re-initialize if the operator client has changed
+            if (_nativeChatLastClient != operatorClient)
+            {
+                _nativeChatWindow.Initialize(operatorClient);
+                _nativeChatLastClient = operatorClient;
+            }
 
             if (_nativeChatWindow.Visible)
             {

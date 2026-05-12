@@ -36,35 +36,48 @@
 
                 <!-- Action buttons (right) -->
                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2">
-                    <!-- Attach (not wired — red border) -->
+                    <!-- Attach (deferred — disabled with tooltip) -->
                     <Button Width="32" Height="32" Padding="0"
-                            Background="Transparent" BorderThickness="1"
-                            BorderBrush="Red">
+                            Background="Transparent" BorderThickness="0"
+                            IsEnabled="False">
                         <ToolTipService.ToolTip>
-                            <ToolTip Content="Attach file (not wired)"/>
+                            <ToolTip Content="File attachments (coming soon)"/>
                         </ToolTipService.ToolTip>
                         <FontIcon Glyph="&#xE723;" FontSize="13"/>
                     </Button>
 
-                    <!-- Mic (not wired — red border) -->
+                    <!-- Mic (deferred — disabled with tooltip) -->
                     <Button Width="32" Height="32" Padding="0"
-                            Background="Transparent" BorderThickness="1"
-                            BorderBrush="Red">
+                            Background="Transparent" BorderThickness="0"
+                            IsEnabled="False">
                         <ToolTipService.ToolTip>
-                            <ToolTip Content="Voice input (not wired)"/>
+                            <ToolTip Content="Voice input (coming soon)"/>
                         </ToolTipService.ToolTip>
                         <FontIcon Glyph="&#xE720;" FontSize="13"/>
                     </Button>
 
-                    <!-- More (not wired — red border) -->
-                    <Button Width="32" Height="32" Padding="0"
-                            Background="Transparent" BorderThickness="1"
-                            BorderBrush="Red">
+                    <!-- More options menu -->
+                    <DropDownButton Width="32" Height="32" Padding="0"
+                                    Background="Transparent" BorderThickness="0">
                         <ToolTipService.ToolTip>
-                            <ToolTip Content="More options (not wired)"/>
+                            <ToolTip Content="More options"/>
                         </ToolTipService.ToolTip>
                         <FontIcon Glyph="&#xE712;" FontSize="13"/>
-                    </Button>
+                        <DropDownButton.Flyout>
+                            <MenuFlyout Placement="TopEdgeAlignedRight">
+                                <MenuFlyoutItem Text="New Chat" Click="OnNewChatClick">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE710;"/>
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                                <MenuFlyoutItem Text="Copy Last Response" Click="OnCopyLastResponseClick">
+                                    <MenuFlyoutItem.Icon>
+                                        <FontIcon Glyph="&#xE8C8;"/>
+                                    </MenuFlyoutItem.Icon>
+                                </MenuFlyoutItem>
+                            </MenuFlyout>
+                        </DropDownButton.Flyout>
+                    </DropDownButton>
 
                     <!-- Send button -->
                     <Button x:Name="SendButton" Click="OnSendClick"

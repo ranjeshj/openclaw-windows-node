@@ -157,6 +157,8 @@
         <!-- Input bar -->
         <local:ChatInputBox x:Name="InputBox" Grid.Row="3"
                             SendRequested="OnSendRequested"
-                            AbortRequested="OnAbortRequested"/>
+                            AbortRequested="OnAbortRequested"
+                            NewChatRequested="OnNewChatRequested"
+                            CopyLastResponseRequested="OnCopyLastResponseRequested"/>
     </Grid>
 </UserControl>

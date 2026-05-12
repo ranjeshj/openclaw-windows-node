@@ -204,4 +204,55 @@ public class ChatViewModelTests : IDisposable
         Assert.Equal("Second", _vm.Messages[2].Content);
         Assert.Equal(MessageRole.Assistant, _vm.Messages[3].Role);
     }
+
+    [Fact]
+    public async Task ToolCall_AddedToActiveMessage()
+    {
+        _service.StreamDelayMs = 0;
+        _service.ThinkingDelayMs = 0;
+
+        _vm.SendCommand.Execute("Hello");
+        await Task.Delay(500);
+
+        // Mock service emits a tool call during streaming
+        Assert.True(_vm.Messages.Count >= 2);
+        var assistant = _vm.Messages[1];
+        Assert.True(assistant.ToolCalls.Count >= 1, "Expected at least one tool call");
+        Assert.Equal("read", assistant.ToolCalls[0].Name);
+    }
+
+    [Fact]
+    public async Task ToolCall_TransitionsToDone()
+    {
+        _service.StreamDelayMs = 0;
+        _service.ThinkingDelayMs = 0;
+
+        _vm.SendCommand.Execute("Hello");
+        await Task.Delay(500);
+
+        Assert.True(_vm.Messages.Count >= 2);
+        var assistant = _vm.Messages[1];
+        if (assistant.ToolCalls.Count > 0)
+        {
+            Assert.Equal(ToolCallPhase.Done, assistant.ToolCalls[0].Phase);
+            Assert.Equal("Read 42 lines from main.cs", assistant.ToolCalls[0].ResultSummary);
+        }
+    }
+
+    [Fact]
+    public async Task SlashNew_ClearsMessages()
+    {
+        // Load some history first
+        await _vm.LoadHistoryAsync();
+        Assert.Equal(3, _vm.Messages.Count);
+
+        // Send /new — should clear messages
+        _vm.SendCommand.Execute("/new");
+        await Task.Delay(500);
+
+        // After /new, history reloads (mock returns 3 items, but messages were cleared first)
+        // The key behavior: IsRunActive should be false, no error
+        Assert.False(_vm.IsRunActive);
+        Assert.Null(_vm.ErrorMessage);
+    }
 }

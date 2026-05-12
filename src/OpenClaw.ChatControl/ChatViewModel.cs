@@ -36,6 +36,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
 
         _service.DeltaReceived += OnDeltaReceived;
         _service.LifecycleChanged += OnLifecycleChanged;
+        _service.ToolCallReceived += OnToolCallReceived;
     }
 
     /// <summary>All messages in the current session.</summary>
@@ -93,6 +94,13 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         ErrorMessage = null;
         var trimmed = text.Trim();
 
+        // Handle /new as a session reset: send to gateway, clear, reload
+        if (trimmed.Equals("/new", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleNewSessionAsync(trimmed);
+            return;
+        }
+
         // Add user message to the list immediately
         var userMsg = new ChatMessage(
             id: Guid.NewGuid().ToString("N"),
@@ -135,6 +143,37 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
                 userMsg.Status = MessageStatus.Error;
                 ErrorMessage = $"Failed to send: {ex.Message}";
             });
+        }
+    }
+
+    private async Task HandleNewSessionAsync(string command)
+    {
+        try
+        {
+            // Send /new to gateway — it creates a new session
+            var idempotencyKey = Guid.NewGuid().ToString("N");
+            await _service.SendAsync(command, idempotencyKey, _sessionCts?.Token ?? default);
+
+            // Clear local state
+            _dispatchToUI(() =>
+            {
+                lock (_streamLock)
+                {
+                    _activeStreamingMessage = null;
+                    ActiveRunId = null;
+                    IsRunActive = false;
+                }
+                Messages.Clear();
+                IsHistoryLoaded = false;
+            });
+
+            // Reload history (should be empty for new session)
+            await LoadHistoryAsync();
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _dispatchToUI(() => ErrorMessage = $"Failed to start new session: {ex.Message}");
         }
     }
 
@@ -240,6 +279,37 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         });
     }
 
+    private void OnToolCallReceived(object? sender, ChatToolCallEvent e)
+    {
+        _dispatchToUI(() =>
+        {
+            lock (_streamLock)
+            {
+                if (_activeStreamingMessage == null ||
+                    (_activeStreamingMessage.RunId != e.RunId && ActiveRunId != e.RunId))
+                    return;
+
+                if (e.Phase == ToolCallPhase.Running)
+                {
+                    _activeStreamingMessage.ToolCalls.Add(new ToolCallInfo(e.ToolCallId, e.ToolName));
+                }
+                else
+                {
+                    // Find existing tool call and update it
+                    foreach (var tc in _activeStreamingMessage.ToolCalls)
+                    {
+                        if (tc.ToolCallId == e.ToolCallId)
+                        {
+                            tc.Phase = e.Phase;
+                            tc.ResultSummary = e.ResultSummary;
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -247,6 +317,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
 
         _service.DeltaReceived -= OnDeltaReceived;
         _service.LifecycleChanged -= OnLifecycleChanged;
+        _service.ToolCallReceived -= OnToolCallReceived;
 
         _sessionCts?.Cancel();
         _sessionCts?.Dispose();
