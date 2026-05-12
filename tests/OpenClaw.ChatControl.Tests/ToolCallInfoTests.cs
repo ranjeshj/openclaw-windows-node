@@ -19,7 +19,7 @@ public class ToolCallInfoTests
     public void DisplayLabel_FormatCorrect()
     {
         var tc = new ToolCallInfo("tc-1", "web_search");
-        Assert.Equal("🔎 Web_search", tc.DisplayLabel);
+        Assert.Equal("🔎 Search", tc.DisplayLabel);
     }
 
     [Fact]
@@ -72,11 +72,26 @@ public class ToolCallInfoTests
     [Fact]
     public void DisplayLabel_ToolSpecificIcons()
     {
-        Assert.StartsWith("🔍", new ToolCallInfo("t1", "grep").DisplayLabel);
-        Assert.StartsWith("📂", new ToolCallInfo("t2", "glob").DisplayLabel);
-        Assert.StartsWith("🌐", new ToolCallInfo("t3", "web_fetch").DisplayLabel);
-        Assert.StartsWith("$", new ToolCallInfo("t4", "bash").DisplayLabel);
-        Assert.StartsWith("⚡", new ToolCallInfo("t5", "exec").DisplayLabel);
+        Assert.Equal("🔍 Search", new ToolCallInfo("t1", "grep").DisplayLabel);
+        Assert.Equal("📂 Files", new ToolCallInfo("t2", "glob").DisplayLabel);
+        Assert.Equal("🌐 Fetch", new ToolCallInfo("t3", "web_fetch").DisplayLabel);
+        Assert.Equal("$ Shell", new ToolCallInfo("t4", "bash").DisplayLabel);
+        Assert.Equal("⚡ Exec", new ToolCallInfo("t5", "exec").DisplayLabel);
+        Assert.Equal("📄 Read", new ToolCallInfo("t6", "read").DisplayLabel);
+        Assert.Equal("📄 Read", new ToolCallInfo("t7", "view").DisplayLabel);
+        Assert.Equal("✏️ Edit", new ToolCallInfo("t8", "edit").DisplayLabel);
+        Assert.Equal("✏️ Edit", new ToolCallInfo("t9", "create").DisplayLabel);
+        Assert.Equal("🤖 Task", new ToolCallInfo("t10", "task").DisplayLabel);
+        Assert.Equal("💬 Intent", new ToolCallInfo("t11", "report_intent").DisplayLabel);
+        Assert.Equal("$ Shell", new ToolCallInfo("t12", "powershell").DisplayLabel);
+    }
+
+    [Fact]
+    public void Resolve_UnknownTool_ReturnsCapitalized()
+    {
+        var (icon, title) = ToolCallInfo.Resolve("custom_tool");
+        Assert.Equal("⚡", icon);
+        Assert.Equal("Custom_tool", title);
     }
 
     [Fact]

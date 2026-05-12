@@ -154,7 +154,27 @@
 
         <!-- Message list -->
         <Grid Grid.Row="1">
-            <ScrollViewer x:Name="MessageScrollViewer"
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Border x:Name="NoticeBanner" Grid.Row="0" Visibility="Collapsed" Padding="12,8"
+                    Background="{ThemeResource SystemFillColorCautionBackgroundBrush}"
+                    BorderBrush="{ThemeResource SystemFillColorCautionBrush}" BorderThickness="0,0,0,1">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="NoticeText" Grid.Column="0" FontSize="12"
+                               VerticalAlignment="Center" TextWrapping="Wrap"/>
+                    <Button x:Name="NoticeRefreshButton" Grid.Column="1" Click="OnNoticeRefreshClick"
+                            Content="Refresh" Padding="8,4" Margin="8,0,0,0"/>
+                </Grid>
+            </Border>
+
+            <ScrollViewer x:Name="MessageScrollViewer" Grid.Row="1"
                           VerticalScrollBarVisibility="Auto"
                           Padding="16,8,16,8">
                 <ItemsRepeater x:Name="MessageList"

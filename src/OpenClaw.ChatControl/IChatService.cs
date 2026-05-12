@@ -87,6 +87,7 @@ public sealed class ChatToolCallEvent : EventArgs
     public string? ResultSummary { get; init; }
     public string? ArgsJson { get; init; }
     public string? ToolOutput { get; init; }
+    public string? Details { get; init; }
 }
 
 /// <summary>A reasoning/thinking text delta from the model.</summary>

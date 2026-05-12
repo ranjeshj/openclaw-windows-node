@@ -37,16 +37,28 @@ public partial class ToolCallInfo : ObservableObject
     [ObservableProperty]
     public partial string? ToolOutput { get; set; }
 
-    /// <summary>Display label with tool-specific icon prefix.</summary>
-    public string DisplayLabel => Name switch
+    /// <summary>Structured details from the tool result (e.g. serialized JSON details).</summary>
+    [ObservableProperty]
+    public partial string? Details { get; set; }
+
+    /// <summary>Resolves a tool name to its display icon and title.</summary>
+    public static (string Icon, string Title) Resolve(string toolName) => toolName switch
     {
-        "bash" or "powershell" => $"$ {Name}",
-        "grep" => $"🔍 {CapitalizeFirst(Name)}",
-        "glob" => $"📂 {CapitalizeFirst(Name)}",
-        "web_fetch" => $"🌐 {CapitalizeFirst(Name)}",
-        "web_search" => $"🔎 {CapitalizeFirst(Name)}",
-        _ => $"⚡ {CapitalizeFirst(Name)}"
+        "bash" or "powershell" => ("$", "Shell"),
+        "read" or "view" => ("📄", "Read"),
+        "edit" or "create" => ("✏️", "Edit"),
+        "grep" => ("🔍", "Search"),
+        "glob" => ("📂", "Files"),
+        "web_fetch" => ("🌐", "Fetch"),
+        "web_search" => ("🔎", "Search"),
+        "exec" => ("⚡", "Exec"),
+        "task" => ("🤖", "Task"),
+        "report_intent" => ("💬", "Intent"),
+        _ => ("⚡", CapitalizeFirst(toolName))
     };
+
+    /// <summary>Display label with tool-specific icon prefix.</summary>
+    public string DisplayLabel { get { var (icon, title) = Resolve(Name); return $"{icon} {title}"; } }
 
     /// <summary>Status icon for the current phase.</summary>
     public string StatusIcon => Phase switch

@@ -60,6 +60,7 @@ public sealed partial class ChatPanel : UserControl
             panel.UpdateEmptyState();
             panel.UpdateInputState();
             panel.UpdateErrorBar();
+            panel.UpdateNoticeBanner();
         }
     }
 
@@ -132,6 +133,10 @@ public sealed partial class ChatPanel : UserControl
                 break;
             case nameof(ChatViewModel.ErrorMessage):
                 UpdateErrorBar();
+                UpdateNoticeBanner();
+                break;
+            case nameof(ChatViewModel.IsConnected):
+                UpdateNoticeBanner();
                 break;
         }
     }
@@ -155,6 +160,35 @@ public sealed partial class ChatPanel : UserControl
     {
         if (ViewModel == null) return;
         InputBox.IsRunActive = ViewModel.IsRunActive;
+    }
+
+    private void UpdateNoticeBanner()
+    {
+        if (ViewModel == null)
+        {
+            NoticeBanner.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        if (!ViewModel.IsConnected)
+        {
+            NoticeText.Text = "Disconnected \u2014 check gateway connection";
+            NoticeBanner.Visibility = Visibility.Visible;
+        }
+        else if (ViewModel.ErrorMessage != null)
+        {
+            NoticeText.Text = ViewModel.ErrorMessage;
+            NoticeBanner.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            NoticeBanner.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void OnNoticeRefreshClick(object sender, RoutedEventArgs e)
+    {
+        _ = ViewModel?.LoadHistoryAsync();
     }
 
     private void UpdateErrorBar()

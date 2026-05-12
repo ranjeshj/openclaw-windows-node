@@ -17,6 +17,7 @@ namespace OpenClawTray.Chat;
 public sealed class GatewayChatService : IChatService, IDisposable
 {
     private readonly IOperatorGatewayClient _client;
+    private int _lastAgentSeq;
     private bool _disposed;
 
     public GatewayChatService(IOperatorGatewayClient client)
@@ -67,7 +68,7 @@ public sealed class GatewayChatService : IChatService, IDisposable
                 var chatMsg = new ChatMessage(
                     id: $"hist-{msg.Ts}",
                     role: role,
-                    content: msg.Content,
+                    content: role == MessageRole.User ? UserMessageSanitizer.Sanitize(msg.Content) : msg.Content,
                     timestamp: msg.Timestamp);
 
                 if (role == MessageRole.Assistant)
@@ -115,6 +116,18 @@ public sealed class GatewayChatService : IChatService, IDisposable
         if (!string.IsNullOrEmpty(evt.SessionKey) &&
             !evt.SessionKey.Contains("main", StringComparison.OrdinalIgnoreCase))
             return;
+
+        // Detect sequence gaps and force history reload
+        if (evt.Seq > 0)
+        {
+            if (_lastAgentSeq > 0 && evt.Seq != _lastAgentSeq + 1)
+            {
+                _lastAgentSeq = evt.Seq;
+                Reconnected?.Invoke(this, EventArgs.Empty);
+                return;
+            }
+            _lastAgentSeq = evt.Seq;
+        }
 
         try
         {
@@ -327,6 +340,17 @@ public sealed class GatewayChatService : IChatService, IDisposable
             resultSummary = TruncateSummary(toolOutput);
         }
 
+        // Extract structured details from result
+        string? details = null;
+        if (phase == ToolCallPhase.Done && evt.Data.TryGetProperty("result", out var resultForDetails))
+        {
+            if (resultForDetails.TryGetProperty("details", out var detailsProp))
+            {
+                try { details = System.Text.Json.JsonSerializer.Serialize(detailsProp, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }); }
+                catch { details = detailsProp.ToString(); }
+            }
+        }
+
         return new ChatToolCallEvent
         {
             RunId = evt.RunId,
@@ -335,7 +359,8 @@ public sealed class GatewayChatService : IChatService, IDisposable
             Phase = phase.Value,
             ResultSummary = resultSummary,
             ArgsJson = argsJson,
-            ToolOutput = toolOutput
+            ToolOutput = toolOutput,
+            Details = details
         };
     }
 

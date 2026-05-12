@@ -362,6 +362,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
                             tc.Phase = e.Phase;
                             tc.ResultSummary = e.ResultSummary;
                             if (!string.IsNullOrEmpty(e.ToolOutput)) tc.ToolOutput = e.ToolOutput;
+                            if (!string.IsNullOrEmpty(e.Details)) tc.Details = e.Details;
                             break;
                         }
                     }

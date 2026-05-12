@@ -85,7 +85,7 @@ public sealed partial class ToolCallCard : UserControl
         _outputExpanded = !_outputExpanded;
         if (_outputExpanded && _toolCall != null)
         {
-            OutputText.Text = _toolCall.ToolOutput ?? _toolCall.ResultSummary ?? "";
+            OutputText.Text = ToolResultFormatter.Format(_toolCall.ToolOutput ?? _toolCall.ResultSummary ?? "", _toolCall.Name);
             OutputSection.Visibility = Visibility.Visible;
             ExpandOutputIcon.Glyph = "\uE70D";
         }
