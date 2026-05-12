@@ -1,0 +1,162 @@
+<UserControl
+    x:Class="OpenClaw.ChatControl.ChatPanel"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:OpenClaw.ChatControl">
+
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <x:Double x:Key="ChatBubbleMaxWidth">600</x:Double>
+            <CornerRadius x:Key="ChatUserBubbleCornerRadius">12,12,2,12</CornerRadius>
+            <CornerRadius x:Key="ChatAssistantBubbleCornerRadius">12,12,12,2</CornerRadius>
+            <Thickness x:Key="ChatBubblePadding">12,8,12,8</Thickness>
+            <Thickness x:Key="ChatMessageMargin">0,2,0,2</Thickness>
+
+            <!-- User message template -->
+            <DataTemplate x:Key="UserMessageTemplate" x:DataType="local:ChatMessage">
+                <StackPanel Margin="{StaticResource ChatMessageMargin}" HorizontalAlignment="Right"
+                            MaxWidth="{StaticResource ChatBubbleMaxWidth}">
+                    <Border Background="{ThemeResource SystemAccentColor}"
+                            CornerRadius="{StaticResource ChatUserBubbleCornerRadius}"
+                            Padding="{StaticResource ChatBubblePadding}">
+                        <TextBlock Text="{x:Bind Content, Mode=OneWay}"
+                                   Foreground="White" TextWrapping="Wrap"
+                                   IsTextSelectionEnabled="True"/>
+                    </Border>
+                    <TextBlock Text="{x:Bind FormattedTime}" FontSize="11"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               HorizontalAlignment="Right" Margin="0,2,4,0"/>
+                </StackPanel>
+            </DataTemplate>
+
+            <!-- Assistant message template -->
+            <DataTemplate x:Key="AssistantMessageTemplate" x:DataType="local:ChatMessage">
+                <StackPanel Margin="{StaticResource ChatMessageMargin}" HorizontalAlignment="Left"
+                            MaxWidth="{StaticResource ChatBubbleMaxWidth}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <!-- Avatar -->
+                        <TextBlock Text="&#x1F99E;" FontSize="20" VerticalAlignment="Top"
+                                   Margin="0,4,8,0" Grid.Column="0"/>
+                        <!-- Bubble -->
+                        <local:AssistantMessageControl DataContext="{x:Bind}" Grid.Column="1"/>
+                    </Grid>
+                    <TextBlock Text="{x:Bind FormattedTime}" FontSize="11"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               HorizontalAlignment="Left" Margin="36,2,0,0"/>
+                </StackPanel>
+            </DataTemplate>
+
+            <!-- System message template -->
+            <DataTemplate x:Key="SystemMessageTemplate" x:DataType="local:ChatMessage">
+                <Grid Margin="{StaticResource ChatMessageMargin}" HorizontalAlignment="Center">
+                    <TextBlock Text="{x:Bind Content, Mode=OneWay}"
+                               Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                               FontSize="12" FontStyle="Italic"
+                               TextWrapping="Wrap" TextAlignment="Center" MaxWidth="400"/>
+                </Grid>
+            </DataTemplate>
+
+            <local:MessageTemplateSelector x:Key="MessageSelector"
+                                           UserTemplate="{StaticResource UserMessageTemplate}"
+                                           AssistantTemplate="{StaticResource AssistantMessageTemplate}"
+                                           SystemTemplate="{StaticResource SystemMessageTemplate}"/>
+        </ResourceDictionary>
+    </UserControl.Resources>
+
+    <Grid Loaded="OnLoaded">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header bar -->
+        <Grid Grid.Row="0" Height="40" Padding="12,0"
+              Background="{ThemeResource LayerFillColorDefaultBrush}"
+              BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+              BorderThickness="0,0,0,1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                <TextBlock Text="&#x1F99E;" FontSize="16"/>
+                <TextBlock Text="Chat" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center"/>
+            </StackPanel>
+
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                <Button x:Name="PopoutButton" Click="OnPopoutClick"
+                        Width="28" Height="28" Padding="0"
+                        Background="Transparent" BorderThickness="0"
+                        BorderBrush="Red">
+                    <ToolTipService.ToolTip>
+                        <ToolTip Content="Open in Browser (not wired)"/>
+                    </ToolTipService.ToolTip>
+                    <FontIcon Glyph="&#xE8A7;" FontSize="12"/>
+                </Button>
+                <Button x:Name="CloseButton" Click="OnCloseClick"
+                        Width="28" Height="28" Padding="0"
+                        Background="Transparent" BorderThickness="0">
+                    <ToolTipService.ToolTip>
+                        <ToolTip Content="Close"/>
+                    </ToolTipService.ToolTip>
+                    <FontIcon Glyph="&#xE8BB;" FontSize="12"/>
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <!-- Message list -->
+        <Grid Grid.Row="1">
+            <ScrollViewer x:Name="MessageScrollViewer"
+                          VerticalScrollBarVisibility="Auto"
+                          Padding="16,8,16,8">
+                <ItemsRepeater x:Name="MessageList"
+                               ItemsSource="{x:Bind ViewModel.Messages, Mode=OneWay}"
+                               ItemTemplate="{StaticResource MessageSelector}">
+                    <ItemsRepeater.Layout>
+                        <StackLayout Spacing="0"/>
+                    </ItemsRepeater.Layout>
+                </ItemsRepeater>
+            </ScrollViewer>
+
+            <!-- Empty state -->
+            <StackPanel x:Name="EmptyState"
+                        VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="8">
+                <TextBlock Text="&#x1F99E;" FontSize="48" HorizontalAlignment="Center"/>
+                <TextBlock Text="Start a conversation"
+                           Style="{StaticResource SubtitleTextBlockStyle}"
+                           HorizontalAlignment="Center"/>
+                <TextBlock Text="Type a message below to get started."
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                           HorizontalAlignment="Center"/>
+            </StackPanel>
+
+            <!-- Scroll-to-bottom button -->
+            <Button x:Name="ScrollToBottomButton"
+                    Click="OnScrollToBottomClick"
+                    HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                    Margin="0,0,0,8" Visibility="Collapsed"
+                    CornerRadius="16" Padding="12,6,12,6">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE74B;" FontSize="12"/>
+                    <TextBlock Text="New messages" FontSize="12"/>
+                </StackPanel>
+            </Button>
+        </Grid>
+
+        <!-- Error bar -->
+        <InfoBar x:Name="ErrorBar" Grid.Row="2" IsOpen="False" Severity="Error" IsClosable="True"/>
+
+        <!-- Input bar -->
+        <local:ChatInputBox x:Name="InputBox" Grid.Row="3"
+                            SendRequested="OnSendRequested"
+                            AbortRequested="OnAbortRequested"/>
+    </Grid>
+</UserControl>

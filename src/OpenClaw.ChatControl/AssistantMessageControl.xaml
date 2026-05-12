@@ -1,0 +1,36 @@
+<UserControl
+    x:Class="OpenClaw.ChatControl.AssistantMessageControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Border x:Name="BubbleBorder"
+            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+            CornerRadius="12,12,12,2"
+            Padding="12,8,12,8"
+            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+            BorderThickness="1" MinHeight="32">
+        <StackPanel Spacing="4">
+            <!-- Thinking indicator -->
+            <StackPanel x:Name="ThinkingPanel" Orientation="Horizontal" Spacing="6" Visibility="Collapsed">
+                <ProgressRing IsActive="True" Width="16" Height="16"/>
+                <TextBlock Text="Thinking..." FontStyle="Italic" FontSize="13"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+
+            <!-- Streaming text (plain TextBlock, shown during streaming) -->
+            <TextBlock x:Name="StreamingText" TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                       Visibility="Collapsed"/>
+
+            <!-- Rendered markdown (shown after completion) -->
+            <ContentPresenter x:Name="RenderedContent" Visibility="Collapsed"/>
+
+            <!-- Error/aborted indicator -->
+            <StackPanel x:Name="ErrorPanel" Orientation="Horizontal" Spacing="6" Visibility="Collapsed">
+                <FontIcon Glyph="&#xE7BA;" FontSize="12"
+                          Foreground="{ThemeResource SystemFillColorCriticalBrush}"/>
+                <TextBlock x:Name="ErrorText" FontSize="12"
+                           Foreground="{ThemeResource SystemFillColorCriticalBrush}"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</UserControl>

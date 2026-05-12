@@ -290,6 +290,106 @@ public class OpenClawGatewayClient : WebSocketClientBase, IOperatorGatewayClient
         _logger.Info($"Sent chat message ({message.Length} chars)");
     }
 
+    /// <summary>Fetch conversation history for the given session.</summary>
+    public async Task<IReadOnlyList<ChatHistoryMessage>> RequestChatHistoryAsync(string? sessionKey = null, CancellationToken ct = default)
+    {
+        if (!IsConnected)
+            throw new InvalidOperationException("Gateway connection is not open");
+
+        var effectiveSessionKey = string.IsNullOrWhiteSpace(sessionKey) ? _mainSessionKey : sessionKey.Trim();
+
+        var requestId = Guid.NewGuid().ToString();
+        var completion = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingWizardResponses[requestId] = completion;
+        TrackPendingRequest(requestId, "chat.history");
+
+        try
+        {
+            var req = new { type = "req", id = requestId, method = "chat.history", @params = new { sessionKey = effectiveSessionKey } };
+            await SendRawAsync(JsonSerializer.Serialize(req));
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, CancellationToken);
+            var timeoutTask = Task.Delay(10000, cts.Token);
+            var completedTask = await Task.WhenAny(completion.Task, timeoutTask);
+
+            if (completedTask == timeoutTask)
+            {
+                _logger.Warn("chat.history request timed out");
+                return Array.Empty<ChatHistoryMessage>();
+            }
+
+            var payload = await completion.Task;
+            var messages = new List<ChatHistoryMessage>();
+
+            if (payload.TryGetProperty("messages", out var messagesArray) && messagesArray.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var msg in messagesArray.EnumerateArray())
+                {
+                    var role = msg.TryGetProperty("role", out var r) ? r.GetString() ?? "" : "";
+                    var ts = msg.TryGetProperty("ts", out var t) && t.ValueKind == JsonValueKind.Number ? t.GetInt64() : 0;
+
+                    // Content can be a string or an array of content blocks
+                    var content = "";
+                    if (msg.TryGetProperty("content", out var c))
+                    {
+                        if (c.ValueKind == JsonValueKind.String)
+                        {
+                            content = c.GetString() ?? "";
+                        }
+                        else if (c.ValueKind == JsonValueKind.Array)
+                        {
+                            var parts = new List<string>();
+                            foreach (var item in c.EnumerateArray())
+                            {
+                                if (item.TryGetProperty("type", out var itemType) &&
+                                    itemType.GetString() == "text" &&
+                                    item.TryGetProperty("text", out var textProp))
+                                {
+                                    parts.Add(textProp.GetString() ?? "");
+                                }
+                            }
+                            content = string.Join("\n", parts);
+                        }
+                    }
+
+                    if (!string.IsNullOrEmpty(content) && (role == "user" || role == "assistant"))
+                    {
+                        messages.Add(new ChatHistoryMessage { Role = role, Content = content, Ts = ts });
+                    }
+                }
+            }
+
+            _logger.Info($"chat.history returned {messages.Count} messages");
+            return messages;
+        }
+        finally
+        {
+            _pendingWizardResponses.TryRemove(requestId, out _);
+            RemovePendingRequest(requestId);
+        }
+    }
+
+    /// <summary>Abort an active agent run.</summary>
+    public async Task AbortRunAsync(string runId, CancellationToken ct = default)
+    {
+        if (!IsConnected)
+            throw new InvalidOperationException("Gateway connection is not open");
+
+        var requestId = Guid.NewGuid().ToString();
+        TrackPendingRequest(requestId, "chat.abort");
+
+        try
+        {
+            var req = new { type = "req", id = requestId, method = "chat.abort", @params = new { runId } };
+            await SendRawAsync(JsonSerializer.Serialize(req));
+            _logger.Info($"Sent chat.abort for run {runId}");
+        }
+        finally
+        {
+            RemovePendingRequest(requestId);
+        }
+    }
+
     /// <summary>
     /// Sends a wizard RPC request and waits for the response payload.
     /// Used for wizard.start, wizard.next, wizard.cancel, wizard.status.

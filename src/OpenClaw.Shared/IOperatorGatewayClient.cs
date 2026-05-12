@@ -52,6 +52,10 @@ public interface IOperatorGatewayClient
 
     // ─── Request Methods ───
     Task SendChatMessageAsync(string message, string? sessionKey = null);
+    /// <summary>Fetch conversation history for the given session (or main session).</summary>
+    Task<IReadOnlyList<ChatHistoryMessage>> RequestChatHistoryAsync(string? sessionKey = null, CancellationToken ct = default);
+    /// <summary>Abort an active agent run.</summary>
+    Task AbortRunAsync(string runId, CancellationToken ct = default);
     Task CheckHealthAsync();
     Task RequestSessionsAsync(string? agentId = null);
     Task RequestUsageAsync();

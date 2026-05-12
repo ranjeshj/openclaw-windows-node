@@ -1515,6 +1515,17 @@ internal static class ModelFormatting
     }
 }
 
+// ── Chat History ──
+
+/// <summary>A single message from chat.history response.</summary>
+public class ChatHistoryMessage
+{
+    public string Role { get; set; } = "";
+    public string Content { get; set; } = "";
+    public long Ts { get; set; }
+    public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(Ts);
+}
+
 // ── Agent Events ──
 
 /// <summary>Raw agent event from gateway broadcast.</summary>

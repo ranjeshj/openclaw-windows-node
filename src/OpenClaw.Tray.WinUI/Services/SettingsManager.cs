@@ -111,6 +111,8 @@ public class SettingsManager
     public bool HasSeenActivityStreamTip { get; set; } = false;
     public string SkippedUpdateTag { get; set; } = "";
     public string? PreferredGatewayId { get; set; }
+    /// <summary>Enable the native WinUI chat control (dev/preview). Default false.</summary>
+    public bool EnableNativeChatDev { get; set; } = false;
 
     public SettingsManager() : this(GetDefaultSettingsDirectory())
     {
@@ -209,6 +211,7 @@ public class SettingsManager
                     PreferredGatewayId = loaded.PreferredGatewayId ?? PreferredGatewayId;
                     NotifyChatResponses = loaded.NotifyChatResponses;
                     PreferStructuredCategories = loaded.PreferStructuredCategories;
+                    EnableNativeChatDev = loaded.EnableNativeChatDev;
                     if (loaded.UserRules != null)
                         UserRules = loaded.UserRules;
                 }
@@ -302,7 +305,8 @@ public class SettingsManager
         PreferredGatewayId = string.IsNullOrWhiteSpace(PreferredGatewayId) ? null : PreferredGatewayId,
         NotifyChatResponses = NotifyChatResponses,
         PreferStructuredCategories = PreferStructuredCategories,
-        UserRules = UserRules
+        UserRules = UserRules,
+        EnableNativeChatDev = EnableNativeChatDev,
     };
 
     public void Save()

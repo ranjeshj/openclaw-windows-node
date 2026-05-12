@@ -561,7 +561,10 @@ public partial class App : Application
 
     private void OnTrayIconSelected(TrayIcon sender, TrayIconEventArgs e)
     {
-        ShowChatWindow();
+        if (_settings?.EnableNativeChatDev == true)
+            ShowNativeChatWindow();
+        else
+            ShowChatWindow();
     }
 
     internal void ShowChatWindow()
@@ -624,6 +627,42 @@ public partial class App : Application
             }
         }
 
+    }
+
+    private Windows.NativeChatWindow? _nativeChatWindow;
+    private void ShowNativeChatWindow()
+    {
+        try
+        {
+            var operatorClient = _connectionManager?.OperatorClient;
+            if (operatorClient == null)
+            {
+                ShowConnectionSettingsForPairingIssue(
+                    "NativeChatWindow",
+                    "Gateway connection required for native chat");
+                return;
+            }
+
+            if (_nativeChatWindow == null)
+            {
+                _nativeChatWindow = new Windows.NativeChatWindow();
+            }
+
+            _nativeChatWindow.Initialize(operatorClient);
+
+            if (_nativeChatWindow.Visible)
+            {
+                _nativeChatWindow.Hide();
+            }
+            else
+            {
+                _nativeChatWindow.ShowNearTray();
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Error($"ShowNativeChatWindow failed: {ex.Message}");
+        }
     }
 
     private void ShowCanvasWindow()
@@ -752,7 +791,13 @@ public partial class App : Application
             case "reconnect": _ = _connectionManager?.ReconnectAsync(); break;
             case "dashboard": OpenDashboard(); break;
             case "canvas": ShowCanvasWindow(); break;
-            case "openchat": ShowChatWindow(); break;
+            case "openchat":
+                if (_settings?.EnableNativeChatDev == true)
+                    ShowNativeChatWindow();
+                else
+                    ShowChatWindow();
+                break;
+            case "nativechat": ShowNativeChatWindow(); break;
             case "voice": ShowVoiceOverlay(); break;
             case "webchat": ShowWebChat(); break;
             case "hub": ShowHub(); break;
@@ -1279,6 +1324,10 @@ public partial class App : Application
         menu.AddSeparator();
         menu.AddMenuItem("Dashboard", "🌐", "dashboard");
         menu.AddMenuItem("Chat", "💬", "openchat");
+        if (_settings?.EnableNativeChatDev == true)
+        {
+            menu.AddMenuItem("Native Chat (Dev)", "🧪", "nativechat");
+        }
         menu.AddMenuItem("Canvas", "🎨", "canvas");
         menu.AddMenuItem("Voice", "🎙️", "voice");
         menu.AddMenuItem("Companion Settings...", "🦞", "companion");
@@ -4622,6 +4671,7 @@ public partial class App : Application
 
         // Close windows explicitly for deterministic shutdown tracing.
         SafeShutdownStep("chat window", () => { _chatWindow?.ForceClose(); _chatWindow = null; });
+        SafeShutdownStep("native chat window", () => { _nativeChatWindow?.ForceClose(); _nativeChatWindow = null; });
         SafeShutdownStep("tray menu window", () => CloseWindow(_trayMenuWindow));
         _trayMenuWindow = null;
         SafeShutdownStep("quick send dialog", () => CloseWindow(_quickSendDialog));

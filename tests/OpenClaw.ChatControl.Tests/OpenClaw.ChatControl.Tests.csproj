@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Override tests/Directory.Build.props TFM: ChatControl uses WinUI types,
+         so tests need the Windows TFM to resolve CommunityToolkit.Mvvm source generators
+         and any future UI-adjacent tests. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenClaw.ChatControl\OpenClaw.ChatControl.csproj" />
+    <!-- Reference MockChatService source directly to avoid depending on WinExe project -->
+    <Compile Include="..\..\src\OpenClaw.ChatControl.DevApp\MockChatService.cs" Link="MockChatService.cs" />
+  </ItemGroup>
+
+</Project>

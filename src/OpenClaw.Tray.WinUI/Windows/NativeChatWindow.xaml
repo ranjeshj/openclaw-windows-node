@@ -1,0 +1,14 @@
+<Window
+    x:Class="OpenClawTray.Windows.NativeChatWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:chat="using:OpenClaw.ChatControl"
+    Title="OpenClaw Native Chat (Dev)">
+
+    <Window.SystemBackdrop>
+        <MicaBackdrop/>
+    </Window.SystemBackdrop>
+
+    <chat:ChatPanel x:Name="ChatControl"
+                    CloseRequested="OnChatCloseRequested"/>
+</Window>

@@ -87,6 +87,8 @@ public class SettingsData
     public bool NotifyChatResponses { get; set; } = true;
     public bool PreferStructuredCategories { get; set; } = true;
     public List<UserNotificationRule>? UserRules { get; set; }
+    /// <summary>Enable the native WinUI chat control (dev/preview). Default false.</summary>
+    public bool EnableNativeChatDev { get; set; } = false;
 
     // ── (Voice / STT settings consolidated into the block above.) ──
 
