@@ -72,6 +72,9 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
 
             _dispatchToUI(() =>
             {
+                // Don't clear messages if a send/run started while history was loading
+                if (IsRunActive) return;
+
                 Messages.Clear();
                 foreach (var msg in history)
                 {
@@ -185,12 +188,21 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
     [RelayCommand(CanExecute = nameof(IsRunActive))]
     private async Task AbortAsync()
     {
-        if (_disposed || ActiveRunId == null) return;
+        if (_disposed) return;
 
-        var runId = ActiveRunId;
+        string? runIdToAbort;
+        lock (_streamLock)
+        {
+            // Use the real RunId from the streaming message if available,
+            // otherwise fall back to ActiveRunId (which may be the idempotency key).
+            runIdToAbort = _activeStreamingMessage?.RunId ?? ActiveRunId;
+        }
+
+        if (runIdToAbort == null) return;
+
         try
         {
-            await _service.AbortAsync(runId, _sessionCts?.Token ?? default);
+            await _service.AbortAsync(runIdToAbort, _sessionCts?.Token ?? default);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -198,7 +210,6 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
             _dispatchToUI(() => ErrorMessage = $"Failed to abort: {ex.Message}");
         }
 
-        // Finalize the streaming message as aborted
         _dispatchToUI(() =>
         {
             lock (_streamLock)
@@ -312,7 +323,7 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         {
             lock (_streamLock)
             {
-                if (!IsActiveRunEvent(e.RunId))
+                if (!IsActiveRunEvent(e.RunId) || _activeStreamingMessage == null)
                     return;
 
                 if (e.Phase == ToolCallPhase.Running)
@@ -344,10 +355,10 @@ public sealed partial class ChatViewModel : ObservableObject, IDisposable
         {
             lock (_streamLock)
             {
-                if (!IsActiveRunEvent(e.RunId))
+                if (!IsActiveRunEvent(e.RunId) || _activeStreamingMessage == null)
                     return;
 
-                _activeStreamingMessage!.AppendReasoning(e.Delta);
+                _activeStreamingMessage.AppendReasoning(e.Delta);
             }
         });
     }

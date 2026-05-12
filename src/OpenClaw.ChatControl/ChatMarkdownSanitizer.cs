@@ -53,16 +53,28 @@ public static partial class ChatMarkdownSanitizer
                 continue;
             }
 
-            // Inline code spans — preserve content
+            // Inline code spans — preserve content (handles multi-backtick spans like `` `code` `` or ``` ``code`` ```)
             if (content[i] == '`')
             {
-                var end = content.IndexOf('`', i + 1);
-                if (end > i)
+                // Count opening backticks
+                int backtickCount = 0;
+                int start = i;
+                while (i < content.Length && content[i] == '`') { backtickCount++; i++; }
+
+                // Find matching closing backticks (same count)
+                var closingPattern = new string('`', backtickCount);
+                var end = content.IndexOf(closingPattern, i, StringComparison.Ordinal);
+                if (end > 0)
                 {
-                    sb.Append(content, i, end - i + 1);
-                    i = end + 1;
-                    continue;
+                    sb.Append(content, start, end + backtickCount - start);
+                    i = end + backtickCount;
                 }
+                else
+                {
+                    // Unmatched backticks — emit as-is
+                    sb.Append(content, start, backtickCount);
+                }
+                continue;
             }
 
             // Image: ![alt](url) → [Image: alt]

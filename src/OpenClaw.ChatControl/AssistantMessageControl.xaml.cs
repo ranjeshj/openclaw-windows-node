@@ -185,23 +185,25 @@ public sealed partial class AssistantMessageControl : UserControl
             Clipboard.SetContent(dp);
             Clipboard.Flush();
 
-            // Ack feedback: swap to checkmark for 700ms
             CopyIcon.Glyph = "\uE73E"; // Checkmark
             await Task.Delay(700);
-            CopyIcon.Glyph = "\uE8C8"; // Copy
+            try { CopyIcon.Glyph = "\uE8C8"; } catch { /* control may be disposed */ }
         }
-        catch { /* clipboard contention */ }
+        catch { /* clipboard contention or disposal */ }
     }
 
     private async void OnReadAloudClick(object sender, RoutedEventArgs e)
     {
         if (_message == null || string.IsNullOrEmpty(_message.Content)) return;
-        ReadAloudRequested?.Invoke(this, _message.Content);
+        try
+        {
+            ReadAloudRequested?.Invoke(this, _message.Content);
 
-        // Ack feedback
-        ReadAloudIcon.Glyph = "\uE73E";
-        await Task.Delay(700);
-        ReadAloudIcon.Glyph = "\uE767";
+            ReadAloudIcon.Glyph = "\uE73E";
+            await Task.Delay(700);
+            try { ReadAloudIcon.Glyph = "\uE767"; } catch { /* control may be disposed */ }
+        }
+        catch { /* disposal */ }
     }
 
     private void RenderMarkdown()

@@ -89,6 +89,11 @@ public sealed class GatewayChatService : IChatService, IDisposable
     {
         if (_disposed) return;
 
+        // Only process events for the main session (ignore cross-session events)
+        if (!string.IsNullOrEmpty(evt.SessionKey) &&
+            !evt.SessionKey.Contains("main", StringComparison.OrdinalIgnoreCase))
+            return;
+
         try
         {
             switch (evt.Stream.ToLowerInvariant())
@@ -319,16 +324,22 @@ public sealed class GatewayChatService : IChatService, IDisposable
 
     private static string? ExtractStringField(JsonElement data, string fieldName)
     {
-        if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty(fieldName, out var prop))
+        if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty(fieldName, out var prop) &&
+            prop.ValueKind == JsonValueKind.String)
             return prop.GetString();
         return null;
     }
 
     private static int? ExtractIntField(JsonElement data, string fieldName)
     {
-        if (data.ValueKind == JsonValueKind.Object && data.TryGetProperty(fieldName, out var prop) && prop.ValueKind == JsonValueKind.Number)
-            return prop.GetInt32();
-        return null;
+        if (data.ValueKind != JsonValueKind.Object || !data.TryGetProperty(fieldName, out var prop) ||
+            prop.ValueKind != JsonValueKind.Number)
+            return null;
+
+        // Handle fractional values (85.0) and large numbers safely
+        if (prop.TryGetInt32(out var intVal))
+            return intVal;
+        try { return (int)prop.GetDouble(); } catch { return null; }
     }
 
     public void Dispose()

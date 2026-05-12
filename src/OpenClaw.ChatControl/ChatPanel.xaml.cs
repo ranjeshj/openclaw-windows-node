@@ -286,6 +286,18 @@ public sealed partial class ChatPanel : UserControl
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         MessageScrollViewer.ViewChanged += OnScrollViewChanged;
+        Unloaded += OnUnloaded;
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        if (_scrollThrottleTimer != null)
+        {
+            _scrollThrottleTimer.Stop();
+            _scrollThrottleTimer.Tick -= OnScrollThrottleTick;
+            _scrollThrottleTimer = null;
+        }
+        MessageScrollViewer.ViewChanged -= OnScrollViewChanged;
     }
 
     private void OnScrollViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
