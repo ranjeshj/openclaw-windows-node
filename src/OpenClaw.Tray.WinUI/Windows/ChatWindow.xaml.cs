@@ -34,6 +34,7 @@ public sealed partial class ChatWindow : WindowEx
     [DllImport("user32.dll")] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO mi);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
     [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, uint attr, ref int val, int size);
 
     private const int GWL_EXSTYLE = -20;
@@ -63,10 +64,10 @@ public sealed partial class ChatWindow : WindowEx
         _chatUrl = BuildChatUrl(gatewayUrl, token);
         InitializeComponent();
 
-        this.SetWindowSize(480, 640);
+        this.SetWindowSize(DefaultChatWidth, DefaultChatHeight);
         this.SetIcon("Assets\\openclaw.ico");
 
-        // Set as tool window (hidden from taskbar) + remove system caption
+        // Set as tool window (hidden from taskbar) + remove system caption.
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         var exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
         SetWindowLong(hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
@@ -98,6 +99,11 @@ public sealed partial class ChatWindow : WindowEx
                 this.Hide();
             };
             contentRoot.KeyboardAccelerators.Add(escAccel);
+            // Suppress the default "Esc" tooltip that WinUI shows for
+            // keyboard accelerators — it lingers as a floating orphan
+            // when the user scrolls the chat timeline.
+            contentRoot.KeyboardAcceleratorPlacementMode =
+                Microsoft.UI.Xaml.Input.KeyboardAcceleratorPlacementMode.Hidden;
         }
 
         // Subscribe to global SettingsChanged so the surface swaps when the
@@ -121,6 +127,9 @@ public sealed partial class ChatWindow : WindowEx
         ApplySystemBackdrop();
         ApplyPreviewTheme();
     }
+
+    private const int DefaultChatWidth = 480;
+    private const int DefaultChatHeight = 640;
 
     private void OnAppSettingsChanged(object? sender, EventArgs e) => ApplyChatSurface();
 
@@ -513,15 +522,17 @@ public sealed partial class ChatWindow : WindowEx
         uint dpi = GetDpiForWindow(hwnd);
         double scale = dpi / 96.0;
 
-        int panelWPx = (int)(480 * scale);
-        int panelHPx = (int)(640 * scale);
+        int panelWPx = (int)(DefaultChatWidth * scale);
+        int panelHPx = (int)(DefaultChatHeight * scale);
 
         int margin = 8;
         int x = work.Right - panelWPx - margin;
         int y = work.Bottom - panelHPx - margin;
 
-        this.Move(x, y);
-        this.SetWindowSize(480, 640);
+        // Position and size atomically while still hidden to avoid flicker.
+        const uint SWP_NOZORDER = 0x0004;
+        const uint SWP_NOACTIVATE = 0x0010;
+        SetWindowPos(hwnd, IntPtr.Zero, x, y, panelWPx, panelHPx, SWP_NOZORDER | SWP_NOACTIVATE);
 
         // Provider may have arrived after construction — re-apply surface so
         // a native-mode window swaps placeholder → live tree on first show.
