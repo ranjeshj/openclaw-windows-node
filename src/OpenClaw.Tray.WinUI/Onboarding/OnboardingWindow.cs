@@ -25,6 +25,11 @@ namespace OpenClawTray.Onboarding;
 /// </summary>
 public sealed class OnboardingWindow : WindowEx
 {
+    private bool _useV2;
+    private bool _v2BridgeBackPending;
+    private OpenClawTray.Onboarding.V2.OnboardingV2State? _v2State;
+    private OpenClawTray.Onboarding.V2.OnboardingV2Bridge? _v2Bridge;
+
     public event EventHandler? OnboardingCompleted;
     public bool Completed { get; private set; }
 
@@ -69,6 +74,15 @@ public sealed class OnboardingWindow : WindowEx
         {
             LocalizationHelper.SetLanguageOverride(testLocale);
         }
+
+        // V2 onboarding redesign: mount OnboardingV2App + a bridge to existing
+        // services. Set OPENCLAW_USE_V2_SETUP=0 to force the legacy flow (kept
+        // as the Advanced-setup fallback and as a kill-switch for one cycle).
+        // The legacy fields below are still initialised so the legacy fallback
+        // (open-on-Connection from Welcome's Advanced link) works without
+        // re-running this constructor.
+        _useV2 = Environment.GetEnvironmentVariable("OPENCLAW_USE_V2_SETUP") != "0"
+              && Environment.GetEnvironmentVariable("OPENCLAW_ONBOARDING_START_ROUTE") != "Connection";
 
         Title = LocalizationHelper.GetString("Onboarding_Title");
         ExtendsContentIntoTitleBar = true;
@@ -130,11 +144,62 @@ public sealed class OnboardingWindow : WindowEx
         }
 
         _host = new FunctionalHostControl();
-        _host.Mount(ctx =>
+        if (_useV2)
         {
-            var (s, _) = ctx.UseState(_state);
-            return Factories.Component<OnboardingApp, OnboardingState>(s);
-        });
+            // Mount the V2 onboarding component tree. The bridge below wires
+            // engine + permission-checker + settings into the V2 state object
+            // so the new UI renders against real data without touching any
+            // service code.
+            _v2State = new OpenClawTray.Onboarding.V2.OnboardingV2State();
+            // Hand the legacy OnboardingState to V2 so the Gateway page can
+            // embed the legacy WizardPage component (provider/model RPC
+            // picker) inside the V2 chrome until that step is itself
+            // redesigned. V2 sees this as opaque object?, only the host
+            // (here) and the GatewayWelcome page know the concrete type.
+            _v2State.LegacyState = _state;
+            _v2State.GatewayWizardChildFactory = () =>
+                Factories.Component<OpenClawTray.Onboarding.Pages.WizardPage, OnboardingState>(_state);
+
+            // Mirror the legacy existing-config probe into V2 state so the V2
+            // Welcome page can render the "replace existing setup?" warn-and-
+            // confirm UI. The probe is synchronous and lightweight (reads
+            // saved tokens / settings flags from disk + memory).
+            if (_state.ExistingConfigGuard is { } guard)
+            {
+                var summary = guard.GetSummary();
+                _v2State.ExistingConfig = new OpenClawTray.Onboarding.V2.OnboardingV2State.ExistingConfigSnapshot(
+                    HasAny: summary.HasAny,
+                    HasToken: summary.HasToken,
+                    HasBootstrapToken: summary.HasBootstrapToken,
+                    HasOperatorDeviceToken: summary.HasOperatorDeviceToken,
+                    HasNodeDeviceToken: summary.HasNodeDeviceToken,
+                    HasNonDefaultGatewayUrl: summary.HasNonDefaultGatewayUrl);
+            }
+
+            // Route V2Strings through the existing LocalizationHelper so V2
+            // text comes from the same .resw resources as legacy strings.
+            // Falls back to V2Strings.DefaultEnUs when a key is missing or
+            // the resource resolver returns the key itself (treated as miss).
+            OpenClawTray.Onboarding.V2.V2Strings.Resolver = LocalizationHelper.GetString;
+
+            _host.Mount(ctx =>
+            {
+                var (s, _) = ctx.UseState(_v2State);
+                return Factories.Component<
+                    OpenClawTray.Onboarding.V2.OnboardingV2App,
+                    OpenClawTray.Onboarding.V2.OnboardingV2State>(s);
+            });
+
+            CreateAndStartV2Bridge(settings);
+        }
+        else
+        {
+            _host.Mount(ctx =>
+            {
+                var (s, _) = ctx.UseState(_state);
+                return Factories.Component<OnboardingApp, OnboardingState>(s);
+            });
+        }
 
         // Build the chat overlay (hidden by default)
         // Leave bottom 60px uncovered so the functional UI nav bar (Back/Next/dots) is visible and clickable
@@ -294,10 +359,115 @@ public sealed class OnboardingWindow : WindowEx
         throw new InvalidOperationException($"Brush resource '{resourceKey}' was not found.");
     }
 
+    /// <summary>
+    /// Build a fresh <see cref="OpenClawTray.Onboarding.V2.OnboardingV2Bridge"/>
+    /// against the current <see cref="_v2State"/>, wire its host-facing
+    /// events, and start it. Idempotent: disposes a prior bridge first.
+    /// Called from the initial V2 mount and from the
+    /// <c>OnRouteChanged</c> bridge-back path so V2 always has a live
+    /// bridge when it's the visible flow — without this, the
+    /// Advanced -> V2 round-trip would leave V2 with no Finished /
+    /// AutoStart-persist / Refresh / engine wiring.
+    /// </summary>
+    private void CreateAndStartV2Bridge(SettingsManager settings)
+    {
+        if (_v2State is null) return;
+
+        try { _v2Bridge?.Dispose(); } catch { /* ignore */ }
+
+        _v2Bridge = new OpenClawTray.Onboarding.V2.OnboardingV2Bridge(
+            state: _v2State,
+            settings: settings,
+            dispatcher: _dispatcherQueue,
+            engineFactory: replaceConfirmed =>
+                ((App)Application.Current).CreateLocalGatewaySetupEngine(replaceConfirmed));
+        _v2Bridge.AdvancedSetupRequested += (_, _) => OpenLegacyAdvancedSetup();
+        _v2Bridge.Finished += (_, _) =>
+        {
+            if (TryCompleteOnboarding())
+            {
+                Close();
+            }
+        };
+        _v2Bridge.Dismissed += (_, _) =>
+        {
+            // V2 Welcome's "Keep my setup" — user has existing configuration
+            // and wants to keep it. Close the window without firing the
+            // completion pipeline so existing settings + gateway connection
+            // are preserved untouched. Reuses the legacy
+            // _dismissedWithoutCompletion flag so OnClosed skips
+            // TryCompleteOnboarding the same way it does for legacy
+            // SetupWarningPage's "Keep my setup" path (PR #340).
+            Logger.Info("[OnboardingWindow] V2 Dismissed — closing without completing");
+            _dismissedWithoutCompletion = true;
+            try
+            {
+                Close();
+            }
+            catch (Exception ex)
+            {
+                _dismissedWithoutCompletion = false;
+                Logger.Warn($"[OnboardingWindow] V2 Dismissed Close() failed: {ex.Message}");
+            }
+        };
+        _v2Bridge.Start();
+    }
+
     private void OnRouteChanged(object? sender, OnboardingRoute route)
     {
         _dispatcherQueue.TryEnqueue(() =>
         {
+            // Advanced -> V2 round-trip: when we kicked the user out to the
+            // legacy Connection page (Welcome's "Advanced setup" link), we
+            // arm _v2BridgeBackPending. As soon as legacy navigates past
+            // Connection, pull them back into V2.
+            //
+            // Two directions out of Connection:
+            //   - FORWARD (user filled out connection, advanced to Wizard/
+            //     Permissions/Ready): bring them back into V2 at the matching
+            //     post-Connection page (V2 Permissions, since Advanced is
+            //     "I have a gateway, just connect me"). The legacy Wizard
+            //     step is intentionally skipped here.
+            //   - BACKWARD (user hit Back on legacy Connection to bail out):
+            //     route is SetupWarning, and we should land back on V2
+            //     Welcome so the user can pick again. (The catch-all used
+            //     to fall through to V2 Permissions, which surfaced as
+            //     "Back from Advanced goes to Permissions instead of start".)
+            if (_v2BridgeBackPending && _v2State is { } v2 && route != OnboardingRoute.Connection)
+            {
+                var v2Next = route switch
+                {
+                    OnboardingRoute.SetupWarning => OpenClawTray.Onboarding.V2.V2Route.Welcome,
+                    OnboardingRoute.Wizard => OpenClawTray.Onboarding.V2.V2Route.Permissions,
+                    OnboardingRoute.Permissions => OpenClawTray.Onboarding.V2.V2Route.Permissions,
+                    OnboardingRoute.Ready => OpenClawTray.Onboarding.V2.V2Route.AllSet,
+                    // Legacy Chat is the post-completion handoff (the user is
+                    // effectively done with onboarding). Treat it as AllSet so
+                    // we never demote a completed user back to V2 Welcome.
+                    // (Hanselman pass-3 finding #4.)
+                    OnboardingRoute.Chat => OpenClawTray.Onboarding.V2.V2Route.AllSet,
+                    _ => LogAndFallbackToV2Welcome(route),
+                };
+                _v2BridgeBackPending = false;
+                _useV2 = true;
+                v2.CurrentRoute = v2Next;
+                _host.Mount(ctx =>
+                {
+                    var (s, _) = ctx.UseState(v2);
+                    return Factories.Component<
+                        OpenClawTray.Onboarding.V2.OnboardingV2App,
+                        OpenClawTray.Onboarding.V2.OnboardingV2State>(s);
+                });
+                // Spin up a fresh bridge so the V2 tail (Permissions ->
+                // AllSet) has live engine / settings / Finished wiring.
+                // Without this, Finish on AllSet would no-op (the prior
+                // bridge was disposed in OpenLegacyAdvancedSetup) and the
+                // launch-at-startup toggle would not persist.
+                CreateAndStartV2Bridge(_settings);
+                _chatOverlay.Visibility = Visibility.Collapsed;
+                return;
+            }
+
             if (route == OnboardingRoute.Chat)
             {
                 _chatOverlay.Visibility = Visibility.Visible;
@@ -309,6 +479,17 @@ public sealed class OnboardingWindow : WindowEx
                 _chatOverlay.Visibility = Visibility.Collapsed;
             }
         });
+    }
+
+    /// <summary>
+    /// Catch-all fallback for the V2 bridge-back route map. Logs a warning so
+    /// future legacy enum additions surface during testing instead of silently
+    /// landing the user on V2 Welcome. (Hanselman pass-3 finding #6.)
+    /// </summary>
+    private static OpenClawTray.Onboarding.V2.V2Route LogAndFallbackToV2Welcome(OnboardingRoute route)
+    {
+        Logger.Warn($"[OnboardingWindow] Unmapped legacy route '{route}' encountered while V2 bridge-back armed; falling back to V2 Welcome");
+        return OpenClawTray.Onboarding.V2.V2Route.Welcome;
     }
 
     private async Task InitializeChatWebViewAsync()
@@ -618,6 +799,9 @@ public sealed class OnboardingWindow : WindowEx
             _ = TryCompleteOnboarding();
         }
 
+        try { _v2Bridge?.Dispose(); } catch { /* ignore */ }
+        _v2Bridge = null;
+
         if (_stateDisposed) return;
         _stateDisposed = true;
         _state.Finished -= OnOnboardingFinished;
@@ -628,6 +812,33 @@ public sealed class OnboardingWindow : WindowEx
             _state.GatewayClient = null;
         }
         _state.Dispose();
+    }
+
+    /// <summary>
+    /// Called when V2 Welcome page's "Advanced setup" link fires. Tears down
+    /// the V2 mount, swaps the host to the legacy <see cref="OnboardingApp"/>,
+    /// jumps straight to the Connection page (Phase 6 of the legacy flow),
+    /// and from there the user follows the existing Advanced flow to
+    /// completion. The legacy <see cref="OnboardingState"/> remains valid (it
+    /// was constructed up-front).
+    /// </summary>
+    private void OpenLegacyAdvancedSetup()
+    {
+        try { _v2Bridge?.Dispose(); } catch { /* ignore */ }
+        _v2Bridge = null;
+        // Keep _v2State alive so we can bridge back to V2 once the legacy
+        // Connection page completes (RouteChanged fires past Connection).
+        _useV2 = false;
+        _v2BridgeBackPending = true;
+
+        _state.SetupPath = SetupPath.Advanced;
+        _state.CurrentRoute = OnboardingRoute.Connection;
+
+        _host.Mount(ctx =>
+        {
+            var (s, _) = ctx.UseState(_state);
+            return Factories.Component<OnboardingApp, OnboardingState>(s);
+        });
     }
 
     /// <summary>
@@ -644,7 +855,10 @@ public sealed class OnboardingWindow : WindowEx
     private bool TryCompleteOnboarding()
     {
         if (_completionDispatched) return true;
-        var finishedFromReady = _state.CurrentRoute == OnboardingRoute.Ready;
+        // V2 path: AllSet replaces legacy Ready as the "finish was clicked from
+        // the terminal page" gate.
+        var finishedFromReady = _state.CurrentRoute == OnboardingRoute.Ready
+            || (_useV2 && _v2State?.CurrentRoute == OpenClawTray.Onboarding.V2.V2Route.AllSet);
         var dataPath = _identityDataPath ?? SettingsManager.SettingsDirectoryPath;
         var setupStillRequired = StartupSetupState.RequiresSetup(_settings, dataPath);
         if (OnboardingCompletionPolicy.Decide(_state.CurrentRoute, setupStillRequired) == OnboardingCompletionOutcome.BlockIncompleteReady)
