@@ -9,14 +9,14 @@ using OpenClawTray.Services;
 using static OpenClawTray.FunctionalUI.Factories;
 using Microsoft.UI.Xaml;
 
-namespace OpenClawTray.Onboarding.Pages;
+namespace OpenClawTray.Onboarding.GatewayWizard;
 
 /// <summary>
-/// Page 3: RPC-Driven Wizard — server-defined setup steps.
-/// Reads/writes wizard state from OnboardingState so it persists across page navigations.
+/// Gateway-driven provider/model wizard rendered inside the V2 setup shell.
+/// Reads/writes wizard state from <see cref="GatewayWizardState"/> so it persists across page navigations.
 /// Falls back to an offline skip message when gateway is unreachable.
 /// </summary>
-public sealed class WizardPage : Component<OnboardingState>
+public sealed class GatewayWizardPage : Component<GatewayWizardState>
 {
     private static readonly Regex UrlInMessagePattern = new(
         @"(https?://[^\s\)\"",]+)",
@@ -27,7 +27,7 @@ public sealed class WizardPage : Component<OnboardingState>
         RegexOptions.Compiled);
     public override Element Render()
     {
-        // Read persisted wizard state from shared OnboardingState
+        // Read persisted wizard state from shared GatewayWizardState.
         var (wizardState, setWizardState) = UseState(Props.WizardLifecycleState ?? "loading");
         var (stepTitle, setStepTitle) = UseState("");
         var (stepMessage, setStepMessage) = UseState("");
@@ -238,7 +238,7 @@ public sealed class WizardPage : Component<OnboardingState>
                 catch (InvalidOperationException ex) when (ex.Message.Contains("already running", StringComparison.OrdinalIgnoreCase))
                 {
                     // Wizard session exists — try to get current status instead of restarting
-                    Logger.Info("[Wizard] Session already running, fetching current status...");
+                    Logger.Info("[GatewayWizard] Session already running, fetching current status...");
                     try
                     {
                         var response = await client.SendWizardRequestAsync("wizard.status");
@@ -247,7 +247,7 @@ public sealed class WizardPage : Component<OnboardingState>
                     catch
                     {
                         // wizard.status not available — skip wizard gracefully
-                        Logger.Warn("[Wizard] Could not resume existing wizard session, skipping");
+                        Logger.Warn("[GatewayWizard] Could not resume existing wizard session, skipping");
                         setWizardState("offline");
                         SaveState("offline");
                     }
@@ -265,7 +265,7 @@ public sealed class WizardPage : Component<OnboardingState>
                 }
                 catch (Exception ex)
                 {
-                    Logger.Error($"[Wizard] Start failed: {ex}");
+                    Logger.Error($"[GatewayWizard] Start failed: {ex}");
                     var genericMsg = "Failed to start wizard setup";
                     setErrorMsg(genericMsg);
                     setWizardState("error");
@@ -337,7 +337,7 @@ public sealed class WizardPage : Component<OnboardingState>
                 // error in the UI so the user can act on it (previously we hid every
                 // failure behind a generic message which made bugs like the channel-pairing
                 // reset (PR #274) impossible to triage without log files).
-                Logger.Error($"[Wizard] Step '{stepId}' ({stepType}) failed: {ex}");
+                Logger.Error($"[GatewayWizard] Step '{stepId}' ({stepType}) failed: {ex}");
                 var fallback = LocalizationHelper.GetString("Onboarding_Wizard_StepError");
                 if (fallback == "Onboarding_Wizard_StepError") fallback = WizardErrorFormatter.GenericFallbackMessage;
                 var msg = WizardErrorFormatter.FormatStepError(ex, stepId, fallback);
@@ -394,7 +394,7 @@ public sealed class WizardPage : Component<OnboardingState>
             }
             catch (Exception ex)
             {
-                Logger.Error($"[Wizard] Skip step failed: {ex}");
+                Logger.Error($"[GatewayWizard] Skip step failed: {ex}");
                 var fallback = LocalizationHelper.GetString("Onboarding_Wizard_StepError");
                 if (fallback == "Onboarding_Wizard_StepError") fallback = WizardErrorFormatter.GenericFallbackMessage;
                 var msg = WizardErrorFormatter.FormatStepError(ex, stepId, fallback);
