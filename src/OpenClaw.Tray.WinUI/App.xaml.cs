@@ -726,7 +726,7 @@ public partial class App : Application
             isNodeEnabled: ShouldInitializeNodeService,
             diagnostics: diagnostics,
             tunnelManager: _sshTunnelService,
-            shouldStartNodeConnection: ShouldInitializeNodeService);
+            shouldStartNodeConnection: (_, _) => ShouldInitializeNodeService());
         _connectionManager.OperatorClientChanged += OnOperatorClientChanged;
         _connectionManager.StateChanged += OnManagerStateChanged;
 
