@@ -1816,7 +1816,16 @@ public sealed class NodeService : IDisposable
 
         var client = _nodeClient;
         _nodeClient = null;
-        try { client?.Dispose(); } catch { /* ignore */ }
+        // Unsubscribe only — the client lifecycle is owned by the connection
+        // manager. Disposing here would double-dispose on shutdown.
+        if (client != null)
+        {
+            client.StatusChanged -= OnNodeStatusChanged;
+            client.PairingStatusChanged -= OnPairingStatusChanged;
+            client.HealthReceived -= OnNodeHealthReceived;
+            client.GatewaySelfUpdated -= OnGatewaySelfUpdated;
+            client.InvokeCompleted -= OnNodeInvokeCompleted;
+        }
 
         try { _cameraCaptureService?.Dispose(); } catch { /* ignore */ }
         try { _screenRecordingService?.Dispose(); } catch { /* ignore */ }

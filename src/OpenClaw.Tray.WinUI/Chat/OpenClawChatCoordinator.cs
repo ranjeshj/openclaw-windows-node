@@ -74,6 +74,13 @@ public sealed class OpenClawChatCoordinator : IDisposable
 
             _provider = newProvider;
         }
+
+        // The bridge is now subscribed to client events. Request a fresh sessions
+        // list so the provider is guaranteed to receive one — the client's own
+        // post-handshake request may have already fired before the bridge existed.
+        _ = client.RequestSessionsAsync().ContinueWith(
+            t => _logger.Warn($"Post-bridge RequestSessionsAsync failed: {t.Exception?.InnerException?.Message}"),
+            TaskContinuationOptions.OnlyOnFaulted);
     }
 
     public Task SpeakChatTextAsync(string text)
