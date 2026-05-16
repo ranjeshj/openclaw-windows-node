@@ -1,5 +1,5 @@
+using OpenClaw.Connection;
 using OpenClaw.Shared;
-using OpenClawTray.Services.Connection;
 using OpenClawTray.Services.LocalGatewaySetup;
 using ConnectionManagerWindowsNodeConnector = OpenClawTray.Services.ConnectionManagerWindowsNodeConnector;
 
