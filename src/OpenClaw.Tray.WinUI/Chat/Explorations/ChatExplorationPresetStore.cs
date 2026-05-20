@@ -26,7 +26,7 @@ public sealed record ChatExplorationPreset
     public bool IsDefault { get; init; }
 
     // Surface
-    public string BackdropMode { get; init; } = "Mica";
+    public string BackdropMode { get; init; } = "Acrylic";
     public bool   UsesHostBackdrop { get; init; }
     public string PreviewTheme { get; init; } = "System";
     public string Variation { get; init; } = "Calm";
@@ -35,7 +35,7 @@ public sealed record ChatExplorationPreset
     public double BubbleCornerRadius { get; init; } = 16;
     public double Gutter { get; init; } = 64;
     public double MessageGap { get; init; } = 12;
-    public string PaddingDensity { get; init; } = "Comfortable";
+    public string PaddingDensity { get; init; } = "Cozy";
     public bool   ShowTimestamps { get; init; } = true;
     public bool   ShowAssistantBubbles { get; init; } = true;
     public bool   ShowToolCalls { get; init; } = true;
@@ -50,13 +50,13 @@ public sealed record ChatExplorationPreset
 
     // Avatar
     public bool   ShowAvatars { get; init; } = true;
-    public string AvatarMode { get; init; } = "Both";
+    public string AvatarMode { get; init; } = "AgentOnly";
 
     // Composer
     public string ComposerLayout { get; init; } = "ThreeRow";
     public double ComposerCornerRadius { get; init; } = 8;
-    public double ComposerIconSize { get; init; } = 14;
-    public double SendButtonSize { get; init; } = 32;
+    public double ComposerIconSize { get; init; } = 16;
+    public double SendButtonSize { get; init; } = 40;
 
     // Icons
     public string SendIconGlyph   { get; init; } = "\uE724";

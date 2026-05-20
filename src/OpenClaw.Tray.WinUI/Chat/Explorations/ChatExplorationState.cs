@@ -133,23 +133,32 @@ public static class ChatExplorationState
 
     private static ChatPreviewState _previewState = ChatPreviewState.Live;
     private static ChatVariation _variation = ChatVariation.Calm;
-    private static ChatBackdropMode _backdropMode = ChatBackdropMode.Mica;
+    // Defaults below were promoted from Kenny's `preset1` (the previous
+    // per-user IsDefault preset under %APPDATA%\OpenClawTray) so a fresh
+    // install lands on the same look without needing the JSON preset file.
+    // Notable diffs vs the original code defaults:
+    //   BackdropMode      Mica          → Acrylic
+    //   PaddingDensity    Comfortable   → Cozy
+    //   AvatarMode        Both          → AgentOnly
+    //   ComposerIconSize  14            → 16
+    //   SendButtonSize    32            → 40
+    private static ChatBackdropMode _backdropMode = ChatBackdropMode.Acrylic;
     private static ChatPreviewTheme _previewTheme = ChatPreviewTheme.System;
     private static bool _usesHostBackdrop;
 
     private static double _bubbleCornerRadius = 16d;
     private static double _gutter = 64d;
     private static double _messageGap = 12d;
-    private static ChatPaddingDensity _paddingDensity = ChatPaddingDensity.Comfortable;
+    private static ChatPaddingDensity _paddingDensity = ChatPaddingDensity.Cozy;
     private static bool _showTimestamps = true;
 
     private static bool _showAvatars = true;
-    private static ChatAvatarMode _avatarMode = ChatAvatarMode.Both;
+    private static ChatAvatarMode _avatarMode = ChatAvatarMode.AgentOnly;
 
     private static ChatComposerLayout _composerLayout = ChatComposerLayout.ThreeRow;
     private static double _composerCornerRadius = 8d;
-    private static double _composerIconSize = 14d;
-    private static double _sendButtonSize = 32d;
+    private static double _composerIconSize = 16d;
+    private static double _sendButtonSize = 40d;
 
     private static Brush? _accentBrushOverride;
     private static Brush? _userBubbleBrushOverride;
