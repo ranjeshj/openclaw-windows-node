@@ -197,6 +197,10 @@ jobs:
       - name: Register WSL path helper (pwsh)
         # Same helper the spike uses. Converts C:\foo\bar -> /mnt/c/foo/bar
         # so workflow steps can hand Windows paths to bash inside WSL.
+        # Plan A: install + fake-LLM bring-up are now driven from inside the
+        # gateway-compat scenarios themselves (via tray.testhook.localSetup.start
+        # + GatewayCollectionFixture). This step + the diagnostics one below
+        # remain to make CI logs useful when the fixture fails.
         shell: pwsh
         run: |
           $helper = @'
@@ -212,43 +216,18 @@ jobs:
           New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
           $helper | Out-File -FilePath $PROFILE.CurrentUserAllHosts -Encoding utf8 -Append
 
-      - name: Install Ubuntu-24.04 distro
+      - name: WSL host diagnostics
+        # Plan A: the scenarios install WSL + openclaw themselves via the
+        # production tray.testhook.localSetup.start path. We log the host's
+        # WSL state so failures in that flow are diagnosable from CI logs.
         shell: pwsh
+        continue-on-error: true
         run: |
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-          wsl --install Ubuntu-24.04 --no-launch --version 2
-          if ($LASTEXITCODE -ne 0) { throw "wsl --install failed with $LASTEXITCODE" }
+          wsl --version
+          wsl --status
           wsl --list --verbose
-
-      - name: Provision openclaw user
-        shell: pwsh
-        run: |
-          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-          $script = ConvertTo-WslPath (Join-Path $env:GITHUB_WORKSPACE "tools/spike/provision.sh")
-          wsl -d Ubuntu-24.04 -u root -- bash -lc "bash $script"
-          if ($LASTEXITCODE -ne 0) { throw "provision failed with $LASTEXITCODE" }
-
-      - name: Install openclaw@${{ steps.ver.outputs.version }}
-        shell: pwsh
-        run: |
-          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-          $version = "${{ steps.ver.outputs.version }}"
-          $cmd = "curl -fsSL --proto '=https' --tlsv1.2 'https://openclaw.ai/install-cli.sh' | " +
-                 "OPENCLAW_PREFIX='/opt/openclaw' OPENCLAW_INSTALL_METHOD='npm' OPENCLAW_VERSION='$version' " +
-                 "SHARP_IGNORE_GLOBAL_LIBVIPS=1 bash -s -- --json --prefix '/opt/openclaw' --version '$version' --no-onboard"
-          wsl -d Ubuntu-24.04 -u openclaw -- bash -lc $cmd
-          if ($LASTEXITCODE -ne 0) { throw "openclaw install failed with $LASTEXITCODE" }
-          wsl -d Ubuntu-24.04 -u openclaw -- /opt/openclaw/bin/openclaw --version
-
-      - name: Start fake LLM server inside WSL
-        shell: pwsh
-        run: |
-          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-          $script = ConvertTo-WslPath (Join-Path $env:GITHUB_WORKSPACE "tools/spike/start-fake-llm.sh")
-          $repoWsl = ConvertTo-WslPath $env:GITHUB_WORKSPACE
-          $port = $env:FAKE_LLM_PORT
-          wsl -d Ubuntu-24.04 -u openclaw -- bash -lc "REPO_WSL_PATH='$repoWsl' FAKE_LLM_PORT='$port' bash $script"
-          if ($LASTEXITCODE -ne 0) { throw "fake-llm bring-up failed with $LASTEXITCODE" }
+          wsl --list --online
 
       - name: Run Gateway tier
         env:
@@ -265,13 +244,20 @@ jobs:
           --results-directory TestResults/Gateway-${{ matrix.gateway_version }}
 
       - name: Collect WSL gateway log
+        # The collection fixture provisions the OpenClawGateway distro
+        # (production default) via tray.testhook.localSetup.start, then
+        # bootstraps fake-LLM inside it. Log path mirrors the production
+        # install layout.
         if: always()
         shell: pwsh
         continue-on-error: true
         run: |
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-          New-Item -ItemType Directory -Path TestResults/Gateway-${{ matrix.gateway_version }}/logs -Force | Out-Null
-          wsl -d Ubuntu-24.04 -u openclaw -- cat /home/openclaw/fake-llm/server.log > TestResults/Gateway-${{ matrix.gateway_version }}/logs/fake-llm.log
+          $logDir = "TestResults/Gateway-${{ matrix.gateway_version }}/logs"
+          New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+          wsl --list --verbose | Out-File -Encoding utf8 "$logDir/wsl-list.log"
+          wsl -d OpenClawGateway -u openclaw -- cat /home/openclaw/fake-llm/server.log > "$logDir/fake-llm.log" 2>&1
+          wsl -d OpenClawGateway -u openclaw -- bash -lc "ls -la /home/openclaw /opt/openclaw 2>&1 || true" > "$logDir/distro-layout.log" 2>&1
 
       - name: Upload gateway-tier results
         if: always()
@@ -287,4 +273,6 @@ jobs:
         shell: pwsh
         run: |
           wsl --shutdown
-          wsl --unregister Ubuntu-24.04
+          # Production distro name; the scenarios install (and we tear down)
+          # the same one a real user would see.
+          wsl --unregister OpenClawGateway
