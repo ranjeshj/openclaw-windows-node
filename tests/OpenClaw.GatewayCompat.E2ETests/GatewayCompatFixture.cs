@@ -141,8 +141,37 @@ public sealed class GatewayCompatFixture : IAsyncLifetime
         {
             _process.Dispose();
         }
+
+        // Preserve tray logs for CI diagnostics when GATEWAY_COMPAT_LOG_DIR
+        // is set (workflow sets this). The dir lives under
+        // OPENCLAW_TRAY_LOCALAPPDATA_DIR/OpenClawTray (we override the
+        // localappdata root via env).
+        var preserveRoot = Environment.GetEnvironmentVariable("GATEWAY_COMPAT_LOG_DIR");
+        if (!string.IsNullOrWhiteSpace(preserveRoot))
+        {
+            try
+            {
+                var dest = Path.Combine(preserveRoot, Path.GetFileName(DataDir.TrimEnd('\\', '/')));
+                Directory.CreateDirectory(dest);
+                CopyDirectory(DataDir, dest);
+            }
+            catch { /* best effort */ }
+        }
+
         try { Directory.Delete(DataDir, recursive: true); } catch { /* best effort */ }
         return Task.CompletedTask;
+    }
+
+    private static void CopyDirectory(string source, string dest)
+    {
+        Directory.CreateDirectory(dest);
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(source, file);
+            var target = Path.Combine(dest, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            try { File.Copy(file, target, overwrite: true); } catch { /* skip locked files */ }
+        }
     }
 
     private void WriteIsolatedSettings()

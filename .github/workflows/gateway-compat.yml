@@ -234,6 +234,10 @@ jobs:
           OPENCLAW_RUN_GATEWAY_COMPAT: "1"
           OPENCLAW_GATEWAY_VERSION: ${{ steps.ver.outputs.version }}
           FAKE_LLM_PORT: ${{ env.FAKE_LLM_PORT }}
+          # Tell the GatewayCompatFixture where to dump per-tray data dirs
+          # (including openclaw-tray.log) before tearing them down. Uploaded
+          # as part of the gateway-tier results artifact.
+          GATEWAY_COMPAT_LOG_DIR: ${{ github.workspace }}\TestResults\Gateway-${{ matrix.gateway_version }}\tray-data
         run: >
           dotnet test tests/OpenClaw.GatewayCompat.E2ETests
           --no-build
@@ -246,7 +250,7 @@ jobs:
       - name: Collect WSL gateway log
         # The collection fixture provisions the OpenClawGateway distro
         # (production default) via tray.testhook.localSetup.start, then
-        # bootstraps fake-LLM inside it. Log path mirrors the production
+        # bootstraps fake-LLM inside it. Log paths mirror the production
         # install layout.
         if: always()
         shell: pwsh
@@ -257,7 +261,10 @@ jobs:
           New-Item -ItemType Directory -Path $logDir -Force | Out-Null
           wsl --list --verbose | Out-File -Encoding utf8 "$logDir/wsl-list.log"
           wsl -d OpenClawGateway -u openclaw -- cat /home/openclaw/fake-llm/server.log > "$logDir/fake-llm.log" 2>&1
-          wsl -d OpenClawGateway -u openclaw -- bash -lc "ls -la /home/openclaw /opt/openclaw 2>&1 || true" > "$logDir/distro-layout.log" 2>&1
+          wsl -d OpenClawGateway -u openclaw -- bash -lc "ls -la /home/openclaw /opt/openclaw /home/openclaw/.openclaw 2>&1 || true" > "$logDir/distro-layout.log" 2>&1
+          wsl -d OpenClawGateway -u openclaw -- bash -lc "find /home/openclaw/.openclaw -name '*.log' 2>/dev/null | head -20 | xargs -I{} sh -c 'echo === {} ===; tail -200 {}'" > "$logDir/openclaw-service.log" 2>&1
+          wsl -d OpenClawGateway -u openclaw -- bash -lc "ps auxww 2>&1 || true" > "$logDir/distro-processes.log" 2>&1
+          wsl -d OpenClawGateway -u openclaw -- bash -lc "ss -tlnp 2>&1 || netstat -tlnp 2>&1 || true" > "$logDir/distro-listeners.log" 2>&1
 
       - name: Upload gateway-tier results
         if: always()

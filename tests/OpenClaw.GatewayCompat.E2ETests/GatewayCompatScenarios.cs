@@ -66,13 +66,48 @@ internal static class GatewayCompatScenarios
     /// applies the fake-LLM provider patch. Shared by
     /// <see cref="GatewayCollectionFixture"/> and per-class fixtures (e.g.
     /// reconnect) that need the same end state.
+    ///
+    /// <para>Retries <see cref="LocalSetupStatus"/> = <c>FailedRetryable</c>
+    /// once: the production UI surfaces a "Retry" button on retryable
+    /// failures (e.g. transient WSL install hiccups on fresh runners), so
+    /// the harness exercises the same UX path.</para>
     /// </summary>
     public static async Task DriveLocalSetupAndPrepareGatewayAsync(
         McpClient client,
-        TimeSpan? localSetupTimeout = null)
+        TimeSpan? localSetupTimeout = null,
+        int maxRetries = 1)
     {
-        var timeout = localSetupTimeout ?? TimeSpan.FromMinutes(20);
+        var timeout = localSetupTimeout ?? TimeSpan.FromMinutes(25);
+        Exception? lastFailure = null;
+        for (var attempt = 0; attempt <= maxRetries; attempt++)
+        {
+            try
+            {
+                await RunLocalSetupOnceAsync(client, timeout).ConfigureAwait(false);
+                await StartFakeLlmInDistroAsync().ConfigureAwait(false);
+                await ApplyFakeLlmProviderAsync(client).ConfigureAwait(false);
+                return;
+            }
+            catch (RetryableLocalSetupException ex) when (attempt < maxRetries)
+            {
+                lastFailure = ex;
+                // Brief pause before re-running localSetup.start. The
+                // production "Retry" handler also re-invokes the same engine
+                // method without further user input.
+                await Task.Delay(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            }
+        }
+        throw lastFailure ?? new InvalidOperationException(
+            "DriveLocalSetupAndPrepareGatewayAsync exited without completing or failing.");
+    }
 
+    private sealed class RetryableLocalSetupException : Exception
+    {
+        public RetryableLocalSetupException(string message) : base(message) { }
+    }
+
+    private static async Task RunLocalSetupOnceAsync(McpClient client, TimeSpan timeout)
+    {
         using (var startResp = await client.CallToolAsync(
             "tray.testhook.localSetup.start",
             new { replaceExistingConfigurationConfirmed = true }).ConfigureAwait(false))
@@ -101,26 +136,21 @@ internal static class GatewayCompatScenarios
 
             if (root.TryGetProperty("isTerminal", out var term) && term.GetBoolean())
             {
-                if (!string.Equals(lastStatus, "Complete", StringComparison.OrdinalIgnoreCase))
-                {
-                    var err = root.TryGetProperty("errorMessage", out var em) ? em.GetString() : null;
-                    throw new InvalidOperationException(
-                        "localSetup did not Complete. status=" + lastStatus +
-                        ", message=" + lastMessage + ", error=" + err);
-                }
-                break;
+                if (string.Equals(lastStatus, "Complete", StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                var err = root.TryGetProperty("errorMessage", out var em) ? em.GetString() : null;
+                var msg = "localSetup did not Complete. status=" + lastStatus +
+                          ", message=" + lastMessage + ", error=" + err;
+                if (string.Equals(lastStatus, "FailedRetryable", StringComparison.OrdinalIgnoreCase))
+                    throw new RetryableLocalSetupException(msg);
+                throw new InvalidOperationException(msg);
             }
             await Task.Delay(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
         }
-        if (DateTime.UtcNow >= deadline)
-        {
-            throw new TimeoutException(
-                $"localSetup did not reach a terminal state within {timeout}. " +
-                "Last status=" + lastStatus + ", message=" + lastMessage);
-        }
-
-        await StartFakeLlmInDistroAsync().ConfigureAwait(false);
-        await ApplyFakeLlmProviderAsync(client).ConfigureAwait(false);
+        throw new TimeoutException(
+            $"localSetup did not reach a terminal state within {timeout}. " +
+            "Last status=" + lastStatus + ", message=" + lastMessage);
     }
 
     /// <summary>
