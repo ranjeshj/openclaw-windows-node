@@ -862,7 +862,7 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
         // (and left indent) stay exactly parallel as the bubble grows
         // with content. Single-element Border[] used as a mutable slot
         // since these are local functions (no nested class allowed).
-        Element RenderAssistantEntry(ChatTimelineItem entry, bool startsBurst, bool endsBurst, bool showAvatar, Microsoft.UI.Xaml.Controls.Border[]? bubbleSlot = null)
+        Element RenderAssistantEntry(ChatTimelineItem entry, bool startsBurst, bool endsBurst, bool showAvatar, Microsoft.UI.Xaml.Controls.Border[]? bubbleSlot = null, Element? nestedTool = null)
         {
             if (string.IsNullOrEmpty(entry.Text))
                 return Empty();
@@ -884,8 +884,17 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
             // HAlign=Left keeps the bubble anchored next to the avatar/timestamp
             // column. MaxWidth=720 caps the growth so long messages stop where
             // the tool burst card's max right edge lands.
+            // When `nestedTool` is supplied, the tool burst (single chip OR
+            // collapsed multi-step summary) is rendered INSIDE the bubble's
+            // content area — directly below the assistant text with a small
+            // top gap — so it visually reads as a child of the bubble.
+            Element bubbleContent = SafeMarkdownText(entry.Text);
+            if (nestedTool != null)
+            {
+                bubbleContent = VStack(8, bubbleContent, nestedTool);
+            }
             var card = Border(
-                SafeMarkdownText(entry.Text)
+                bubbleContent
             ).Background(assistantBubbleBg)
              .Set(b =>
              {
@@ -935,7 +944,7 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
         // into `▸ ⚡ <ToolName> · <summary>  [Done]`; click expands the row
         // to reveal the original args + raw output (the previous chip body).
         // A single trailing `Tool · <time>` footer sits below the card.
-        Element RenderToolBurst(System.Collections.Generic.IReadOnlyList<ChatTimelineItem> entries, bool showAvatar, Microsoft.UI.Xaml.Controls.Border[]? bubbleSlot = null)
+        Element RenderToolBurst(System.Collections.Generic.IReadOnlyList<ChatTimelineItem> entries, bool showAvatar, Microsoft.UI.Xaml.Controls.Border[]? bubbleSlot = null, bool nested = false)
         {
             // Status pill / glyph color resolved per entry (each row has its
             // own status). The body styling (block bg/border) is shared across
@@ -1228,6 +1237,16 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
                 .Set(b =>
                 {
                     b.CornerRadius = bubbleRadius;
+
+                    if (nested)
+                    {
+                        // Inside the assistant bubble: stretch to bubble
+                        // content width. No MaxWidth, no Width binding —
+                        // the parent bubble's content area sizes us.
+                        b.HorizontalAlignment = HorizontalAlignment.Stretch;
+                        return;
+                    }
+
                     b.MaxWidth = 720 - toolIndent;
                     b.HorizontalAlignment = HorizontalAlignment.Left;
 
@@ -1249,6 +1268,16 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
                         Sync();
                     }
                 });
+
+            // Wrap a finished card with the appropriate outer layout. In nested
+            // mode the card is returned as a stretchable child element with a
+            // small top gap (the assistant bubble's padding takes care of the
+            // sides). In external mode the card is anchored to toolLeftMargin
+            // so its right edge stays parallel to the bubble's, with 6/6
+            // vertical breathing room and the gutter on the right.
+            Element Wrap(Element card) => nested
+                ? card.HAlign(HorizontalAlignment.Stretch)
+                : AnchorLeft(card).HAlign(HorizontalAlignment.Stretch).Margin(toolLeftMargin, 6, gutter, 6);
 
             // Wrap the card in a left-anchored Auto/Star Grid so its 704-wide
             // slot stays pinned to toolLeftMargin instead of being centered
@@ -1358,9 +1387,7 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
                     // the summary header inside the same card.
                     pieces.AddRange(rows);
                 }
-                return AnchorLeft(CardOf(pieces.ToArray()))
-                    .HAlign(HorizontalAlignment.Stretch)
-                    .Margin(toolLeftMargin, 6, gutter, 6);
+                return Wrap(CardOf(pieces.ToArray()));
             }
 
             // TaskHeader: prepend a non-clickable header row to the card.
@@ -1389,9 +1416,7 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
                 combined[0] = taskHeader;
                 Array.Copy(rows, 0, combined, 1, rows.Length);
 
-                return AnchorLeft(CardOf(combined))
-                    .HAlign(HorizontalAlignment.Stretch)
-                    .Margin(toolLeftMargin, 6, gutter, 6);
+                return Wrap(CardOf(combined));
             }
 
             // TaskList: per-step rows with a status icon (✓ / spinner / ✕)
@@ -1599,13 +1624,10 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
             // assistant bubble it follows.
             if (style == ToolBurstStyle.FooterReframe)
             {
-                return AnchorLeft(CardOf(rows))
-                    .HAlign(HorizontalAlignment.Stretch)
-                    .Margin(toolLeftMargin, 6, gutter, 6);
+                return Wrap(CardOf(rows));
             }
 
-            return AnchorLeft(CardOf(rows))
-                .Margin(toolLeftMargin, 6, gutter, 6);
+            return Wrap(CardOf(rows));
         }
 
         // Legacy single-entry RenderToolEntry removed — all ToolCall rendering
@@ -1747,6 +1769,51 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
         // rendered below it in the same turn. Reset at each User entry.
         Microsoft.UI.Xaml.Controls.Border[]? currentBubbleSlot = null;
 
+        // Pre-compute the last orderedIdx position of the turn containing each
+        // entry. Used to look ahead from an assistant entry to its tool burst
+        // (which the orderedIdx reorder always places at the tail of the turn)
+        // so we can decide whether to nest the burst inside the assistant
+        // bubble's content area.
+        var turnEndAt = new int[orderedIdx.Length];
+        {
+            int ts = 0;
+            for (int k = 1; k < orderedIdx.Length; k++)
+            {
+                if (Props.Entries[orderedIdx[k]].Kind == ChatTimelineItemKind.User)
+                {
+                    for (int j = ts; j < k; j++) turnEndAt[j] = k - 1;
+                    ts = k;
+                }
+            }
+            for (int j = ts; j < orderedIdx.Length; j++) turnEndAt[j] = orderedIdx.Length - 1;
+        }
+
+        // orderedIdx positions whose ToolCall entries have been "consumed" by
+        // an assistant bubble that nested them inline — render Empty() for
+        // these so the burst doesn't appear twice (once inside the bubble,
+        // once below it).
+        var nestedConsumed = new System.Collections.Generic.HashSet<int>();
+
+        // Nestable rule: a burst nests inside the assistant bubble when it
+        // would otherwise render as a single visible row — i.e. one chip
+        // (count==1) or a collapsed multi-step summary (count>=2 with every
+        // step in a terminal state, under Auto / CompactSummary). In-flight
+        // multi-step bursts stay external so live progress remains visible.
+        bool BurstIsNestable(System.Collections.Generic.List<ChatTimelineItem> b)
+        {
+            if (b.Count == 0) return false;
+            if (b.Count == 1) return true;
+            bool allTerminal = true;
+            foreach (var e in b)
+            {
+                if (e.ToolResult == ChatToolCallStatus.InProgress) { allTerminal = false; break; }
+            }
+            var s = ChatExplorationState.ToolBurstStyle;
+            if (s == ToolBurstStyle.Auto || s == ToolBurstStyle.CompactSummary)
+                return allTerminal;
+            return false;
+        }
+
         for (int k = 0; k < orderedIdx.Length; k++)
         {
             int i = orderedIdx[k];
@@ -1777,6 +1844,13 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
                     renderedEntries[k] = Empty().WithKey(entry.Id);
                     continue;
                 }
+                if (nestedConsumed.Contains(k))
+                {
+                    // The assistant bubble above already rendered this burst
+                    // inline as a child element — emit nothing here.
+                    renderedEntries[k] = Empty().WithKey(entry.Id);
+                    continue;
+                }
                 var burst = new System.Collections.Generic.List<ChatTimelineItem> { entry };
                 int kj = k + 1;
                 while (kj < orderedIdx.Length && Props.Entries[orderedIdx[kj]].Kind == ChatTimelineItemKind.ToolCall)
@@ -1791,7 +1865,36 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
             if (entry.Kind == ChatTimelineItemKind.Assistant)
             {
                 currentBubbleSlot ??= new Microsoft.UI.Xaml.Controls.Border[1];
-                renderedEntries[k] = RenderAssistantEntry(entry, startsBurst, endsBurst, showAvatar, currentBubbleSlot).WithKey(entry.Id);
+
+                // Look ahead inside the same turn for a contiguous tool burst
+                // following this assistant entry. The orderedIdx reorder
+                // guarantees tools are placed at the tail of the turn, so
+                // when this is the last assistant (endsBurst && nextKind==Tool)
+                // the burst starts at k+1 and runs through turnEndAt[k].
+                Element? nestedTool = null;
+                if (endsBurst && showToolCalls && nextKind == ChatTimelineItemKind.ToolCall)
+                {
+                    var lookahead = new System.Collections.Generic.List<ChatTimelineItem>();
+                    int turnEnd = turnEndAt[k];
+                    int kj = k + 1;
+                    while (kj <= turnEnd && Props.Entries[orderedIdx[kj]].Kind == ChatTimelineItemKind.ToolCall)
+                    {
+                        lookahead.Add(Props.Entries[orderedIdx[kj]]);
+                        kj++;
+                    }
+                    if (lookahead.Count > 0 && BurstIsNestable(lookahead))
+                    {
+                        // Render the burst in nested mode (no avatar slot, no
+                        // outer left margin, stretches to bubble content
+                        // width) and consume the orderedIdx positions so they
+                        // don't render again as external rows below.
+                        nestedTool = RenderToolBurst(lookahead, showAvatar: false, bubbleSlot: null, nested: true);
+                        for (int kn = k + 1; kn < k + 1 + lookahead.Count; kn++)
+                            nestedConsumed.Add(kn);
+                    }
+                }
+
+                renderedEntries[k] = RenderAssistantEntry(entry, startsBurst, endsBurst, showAvatar, currentBubbleSlot, nestedTool).WithKey(entry.Id);
                 continue;
             }
 
