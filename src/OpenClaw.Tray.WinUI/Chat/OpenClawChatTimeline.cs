@@ -1203,7 +1203,12 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
             // When avatars are globally hidden, drop the avatar slot but still
             // keep the indent so the tool card sits inside the bubble's reading
             // column rather than aligning to the gutter.
-            const int toolIndent = 16;
+            // Exception: when there's no assistant bubble in this turn yet
+            // (i.e. the tool ran while the agent is still "thinking…" and no
+            // reply has streamed), drop the indent so the card aligns flush
+            // under the thinking indicator instead of hanging extra-right.
+            bool hasBubbleAbove = bubbleSlot != null;
+            int toolIndent = hasBubbleAbove ? 16 : 0;
             var toolAvatarSlot = showAssistAvatar ? (36 + (int)bubbleSideMargin) : 0;
             var toolLeftMargin = 16 + toolAvatarSlot + toolIndent;
 
