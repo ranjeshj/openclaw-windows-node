@@ -1085,7 +1085,19 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
                     Element BuildSection(string sectionLabel, string contentText)
                     {
                         var displayText = TryFormatJsonForDisplay(contentText);
-                        var sectionRow = (FlexRow(
+
+                        // Phantom chevron + trailing 6px margin matches the
+                        // header row's chevron column width + chevron→⚡ gap so
+                        // the section ⚡ in col 1 starts at the same x as the
+                        // header ⚡ above. Using the actual chevron glyph at
+                        // the same FontSize keeps the alignment stable under
+                        // font/density changes.
+                        Element PhantomChevron() => Caption("▸")
+                            .Foreground(new SolidColorBrush(Colors.Transparent))
+                            .Margin(0, 0, 6, 0)
+                            .VAlign(VerticalAlignment.Center);
+
+                        var labelRow = (FlexRow(
                             Caption("⚡").Foreground(TertiaryText)
                                 .Set(t => { t.FontSize = 11; })
                                 .VAlign(VerticalAlignment.Center),
@@ -1098,7 +1110,7 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
                                     t.CharacterSpacing = 60;
                                 })
                                 .VAlign(VerticalAlignment.Center)
-                        ) with { ColumnGap = 6 }).Padding(12, 6, 12, 6);
+                        ) with { ColumnGap = 6 });
 
                         var codeBlock = Border(
                             ScrollView(
@@ -1122,9 +1134,22 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
                         ).Background(blockBg)
                          .CornerRadius(6)
                          .WithBorder(blockBorder, 1)
-                         .Margin(12, 0, 12, 8);
+                         .Margin(0, 4, 0, 0);
 
-                        return VStack(0, sectionRow, codeBlock);
+                        // Outer Grid: phantom chevron in col 0 reserves the
+                        // header-chevron width + 6px gap (via the chevron's
+                        // right margin); col 1 (label + code block) starts
+                        // exactly where the header ⚡ does.
+                        var sectionGrid = Grid(
+                            [GridSize.Auto, GridSize.Star()],
+                            [GridSize.Auto, GridSize.Auto],
+                            PhantomChevron().Grid(row: 0, column: 0),
+                            labelRow.Grid(row: 0, column: 1),
+                            codeBlock.Grid(row: 1, column: 1)
+                        );
+
+                        return Border(sectionGrid)
+                            .Padding(bubblePadding.Left, 6, bubblePadding.Right, 8);
                     }
 
                     var callContent = !string.IsNullOrEmpty(entry.Text) && entry.Text != entry.ToolName
