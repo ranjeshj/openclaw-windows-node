@@ -113,6 +113,31 @@ Point any openai-compatible provider at `http://127.0.0.1:18888/v1`
    - otherwise keep it in the nightly-only lane.
 4. Document the scenario here.
 
+### Same-path-as-user rule (mandatory)
+
+When you add or modify a `tray.testhook.*` tool, the tool MUST invoke
+the same method the matching UI click handler invokes. If the UI handler
+does the work inline, extract it into a shared service method first and
+have BOTH the handler and the test hook call that method.
+
+This rule exists because gateway-compat's whole purpose is catching
+regressions in the production code path a real user hits. A test that
+passes against a parallel implementation tells us nothing.
+
+Concrete examples:
+
+| Test hook | Shared method (called by both UI and hook) | UI caller |
+|---|---|---|
+| `tray.testhook.localSetup.start` | `App.CreateLocalGatewaySetupEngine(...).RunLocalOnlyAsync(...)` | `LocalSetupProgressPage` "Set up locally" handler |
+| `tray.testhook.chat.send` | `OpenClawChatDataProvider.SendMessageAsync(...)` | `ChatWindow.OnSendClicked` |
+| `tray.testhook.pairing.reset` | `GatewayRegistry.Reset(...)` + per-gateway key wipe (one helper) | Settings page "Reset pairing" button |
+| `tray.testhook.connection.waitFor` | `GatewayConnectionManager` state observer (read, no write) | observed by every UI surface that shows connection state |
+
+When you write a new hook, **include a code comment naming the UI
+caller and the shared method**. The matching unit test should assert
+behavior, not implementation, so a future refactor that consolidates
+two handlers into one still passes.
+
 ## Extending the fake LLM
 
 The mock at `tools/fake-llm-server/server.mjs` starts intentionally tiny

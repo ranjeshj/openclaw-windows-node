@@ -13,6 +13,21 @@
 //  NodeService.RegisterTestHookCapability), so a misbehaving gateway can
 //  never trigger them.
 //
+//  ===========================================================================
+//  RULE: same-path-as-user. (User input, 2026-05-19)
+//
+//  Every tool in this capability MUST end up invoking the same method the
+//  matching UI click handler invokes. If the UI handler does X inline,
+//  extract X into a shared service method first and have BOTH the handler
+//  and this tool call that method. Do NOT reimplement "roughly the same
+//  thing" here — that defeats the entire purpose of gateway-compat
+//  testing (a test that passes against a parallel implementation tells us
+//  nothing about whether the real UI path still works).
+//
+//  Each tool implementation must include a comment that names the UI
+//  caller and the shared method, so future refactors can't drift.
+//  ===========================================================================
+//
 //  Tool surface (W3.2 — diagnostics.dump implemented, rest declared with
 //  NotImplementedYet so the harness can probe the surface). Later commits
 //  add the real implementations.
