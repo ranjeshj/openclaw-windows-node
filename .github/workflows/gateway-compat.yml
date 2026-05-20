@@ -125,7 +125,13 @@ jobs:
 
   gateway:
     name: Gateway tier (WSL + openclaw@${{ matrix.gateway_version }})
+    # PR/push: LKG matrix cell runs as merge gate (~3 min added latency,
+    # catches gateway regressions before merge).
+    # Nightly: full matrix (LKG + latest); "latest" failures alert-only.
+    # workflow_dispatch: only when run_gateway_tier=true.
     if: >
+      github.event_name == 'pull_request' ||
+      github.event_name == 'push' ||
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_dispatch' && inputs.run_gateway_tier == true)
     needs: smoke
@@ -134,10 +140,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # LKG: the pinned version users actually get. Failure here gates merges.
-        # latest: alert-only signal of upcoming breakage. continue-on-error
-        # below makes "latest" failures visible but non-blocking.
-        gateway_version: [lkg, latest]
+        gateway_version: ${{ fromJson((github.event_name == 'pull_request' || github.event_name == 'push') && '["lkg"]' || '["lkg","latest"]') }}
         include:
           - gateway_version: lkg
             failure_is_blocking: true

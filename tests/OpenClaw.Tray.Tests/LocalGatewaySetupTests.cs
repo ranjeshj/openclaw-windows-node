@@ -78,44 +78,6 @@ public class LocalGatewaySetupTests
 
         Assert.Equal("OpenClawGatewayE2E", config.DistroName);
         Assert.True(config.AllowExistingDistro);
-        Assert.Null(config.OpenClawInstallVersion);
-    }
-
-    [Fact]
-    public void RuntimeConfiguration_OpenClawInstallVersion_ReadFromEnvironment()
-    {
-        var environment = new FakeSetupEnvironment(new Dictionary<string, string?>
-        {
-            [LocalGatewaySetupRuntimeConfiguration.OpenClawInstallVersionVariable] = "2026.6.1"
-        });
-
-        var config = LocalGatewaySetupRuntimeConfiguration.FromEnvironment(environment);
-
-        Assert.Equal("2026.6.1", config.OpenClawInstallVersion);
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void RuntimeConfiguration_OpenClawInstallVersion_BlankBecomesNull(string? value)
-    {
-        var environment = new FakeSetupEnvironment(new Dictionary<string, string?>
-        {
-            [LocalGatewaySetupRuntimeConfiguration.OpenClawInstallVersionVariable] = value
-        });
-
-        var config = LocalGatewaySetupRuntimeConfiguration.FromEnvironment(environment);
-
-        Assert.Null(config.OpenClawInstallVersion);
-    }
-
-    [Fact]
-    public void LocalGatewaySetupOptions_DefaultsToLkgVersion()
-    {
-        var options = new LocalGatewaySetupOptions();
-
-        Assert.Equal(OpenClaw.Shared.GatewayLkg.Version, options.OpenClawInstallVersion);
     }
 
     [Fact]

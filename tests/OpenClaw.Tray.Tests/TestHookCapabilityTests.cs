@@ -14,11 +14,21 @@ namespace OpenClaw.Tray.Tests;
 
 /// <summary>
 /// Unit tests for the gateway-compat <c>tray.testhook.*</c> MCP tool surface.
-/// The capability itself is compile-time-gated behind
-/// <c>OPENCLAW_E2E_HOOKS</c>; the test project defines that constant so we can
-/// exercise the class. The Release-build smoke
-/// (<see cref="ReleaseBuildExcludesTestHooksTests"/>) verifies that the
-/// shipped tray binary does <i>not</i> compile it.
+/// Pruned (2026-05-19) to the minimum set that the E2E harness cannot
+/// replace:
+/// <list type="bullet">
+///   <item>The runtime <c>OPENCLAW_TRAY_E2E</c> gate (security invariant —
+///         E2E always sets the var so it can't prove the gate works).</item>
+///   <item>Exact command-sequence assertions for hooks that delegate to
+///         WSL (the same-path rule needs verifying at this level).</item>
+///   <item>Failure-mode assertions that are slow or impractical to drive
+///         from real WSL/openclaw.</item>
+/// </list>
+/// Surface stability and diagnostics shape are covered by
+/// <c>OpenClaw.GatewayCompat.E2ETests.HarnessSmokeTests</c>. The
+/// Release-build smoke (<see cref="ReleaseBuildExcludesTestHooksTests"/>)
+/// is the only check that the shipped tray binary doesn't contain this
+/// type at all.
 /// </summary>
 public class TestHookCapabilityTests : IDisposable
 {
@@ -37,29 +47,11 @@ public class TestHookCapabilityTests : IDisposable
     }
 
     [Fact]
-    public void Category_AndCommandSurface_AreStable()
-    {
-        var cap = NewCapability();
-
-        Assert.Equal("tray.testhook", cap.Category);
-        // Snapshot the surface so accidental rename/removal is caught.
-        var expected = new[]
-        {
-            "tray.testhook.diagnostics.dump",
-            "tray.testhook.gateway.config.patch",
-            "tray.testhook.localSetup.start",
-            "tray.testhook.localSetup.status",
-            "tray.testhook.localSetup.cancel",
-            "tray.testhook.connection.waitFor",
-            "tray.testhook.pairing.reset",
-            "tray.testhook.chat.send",
-        };
-        Assert.Equal(expected, cap.Commands.ToArray());
-    }
-
-    [Fact]
     public async Task AllTools_AreGatedBy_OPENCLAW_TRAY_E2E()
     {
+        // Security invariant: even when the type is present in the binary,
+        // every command must refuse without the env var set. E2E can't
+        // prove this — it always sets OPENCLAW_TRAY_E2E=1.
         Environment.SetEnvironmentVariable(
             TestHookCapability.RuntimeEnabledEnvironmentVariable, null);
         var cap = NewCapability();
@@ -70,83 +62,6 @@ public class TestHookCapabilityTests : IDisposable
             Assert.False(response.Ok, $"Expected {command} to refuse without OPENCLAW_TRAY_E2E=1");
             Assert.Contains("OPENCLAW_TRAY_E2E", response.Error ?? "");
         }
-    }
-
-    [Fact]
-    public async Task DiagnosticsDump_ReturnsExpectedShape_WhenEnabled()
-    {
-        Environment.SetEnvironmentVariable(
-            TestHookCapability.RuntimeEnabledEnvironmentVariable, "1");
-        var diagnostics = new TestHookDiagnostics(
-            Connection: new { state = "connected" },
-            Node: new { capabilities = new[] { "system", "device" } },
-            Pairing: new { paired = true, deviceId = "dev-123" },
-            SettingsSnapshot: new { enableNodeMode = true },
-            Errors: Array.Empty<string>());
-        var cap = NewCapability(() => diagnostics);
-
-        var response = await cap.ExecuteAsync(new NodeInvokeRequest
-        {
-            Command = "tray.testhook.diagnostics.dump",
-        });
-
-        Assert.True(response.Ok);
-        Assert.NotNull(response.Payload);
-        var json = JsonSerializer.Serialize(response.Payload);
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
-        Assert.Equal(GatewayLkg.Version, root.GetProperty("gatewayLkgVersion").GetString());
-        Assert.True(root.TryGetProperty("trayUptimeSeconds", out _));
-        Assert.True(root.TryGetProperty("processId", out _));
-        Assert.Equal("connected",
-            root.GetProperty("connection").GetProperty("state").GetString());
-        Assert.True(root.GetProperty("pairing").GetProperty("paired").GetBoolean());
-        Assert.Equal("dev-123",
-            root.GetProperty("pairing").GetProperty("deviceId").GetString());
-    }
-
-    [Fact]
-    public async Task DiagnosticsDump_SurfacesProviderErrors_InsteadOfThrowing()
-    {
-        Environment.SetEnvironmentVariable(
-            TestHookCapability.RuntimeEnabledEnvironmentVariable, "1");
-        var cap = NewCapability(() => throw new InvalidOperationException("simulated failure"));
-
-        var response = await cap.ExecuteAsync(new NodeInvokeRequest
-        {
-            Command = "tray.testhook.diagnostics.dump",
-        });
-
-        Assert.True(response.Ok, "diagnostics.dump should never throw — it must wrap errors");
-        var json = JsonSerializer.Serialize(response.Payload);
-        Assert.Contains("simulated failure", json);
-        Assert.Contains("diagnosticsProvider failed", json);
-    }
-
-    [Theory]
-    [InlineData("tray.testhook.localSetup.start")]
-    [InlineData("tray.testhook.localSetup.status")]
-    [InlineData("tray.testhook.localSetup.cancel")]
-    [InlineData("tray.testhook.connection.waitFor")]
-    [InlineData("tray.testhook.pairing.reset")]
-    [InlineData("tray.testhook.chat.send")]
-    public async Task NotYetImplementedTools_FailLoudlyWithStableMessage(string command)
-    {
-        // The harness probes the full surface during fixture init; if it
-        // silently succeeded against a not-yet-implemented tool, the
-        // failure mode would be a missing assertion much later in the
-        // run. The explicit "not yet implemented" failure message is
-        // intentional and asserted here so a future commit that fills
-        // in the tool can't accidentally regress to silent success.
-        Environment.SetEnvironmentVariable(
-            TestHookCapability.RuntimeEnabledEnvironmentVariable, "1");
-        var cap = NewCapability();
-
-        var response = await cap.ExecuteAsync(new NodeInvokeRequest { Command = command });
-
-        Assert.False(response.Ok);
-        Assert.Contains("not yet implemented", response.Error ?? "");
     }
 
     [Fact]
@@ -166,7 +81,9 @@ public class TestHookCapabilityTests : IDisposable
     }
 
     // -----------------------------------------------------------------------
-    // gateway.config.patch
+    // gateway.config.patch — kept because the same-path rule needs exact
+    // command-sequence verification, and write/validate failure modes are
+    // expensive to drive from real WSL.
     // -----------------------------------------------------------------------
 
     [Fact]
@@ -183,39 +100,12 @@ public class TestHookCapabilityTests : IDisposable
     }
 
     [Fact]
-    public async Task GatewayConfigPatch_RequiresDistroName()
-    {
-        Environment.SetEnvironmentVariable(
-            TestHookCapability.RuntimeEnabledEnvironmentVariable, "1");
-        var cap = NewCapability(wsl: new FakeWslRunner());
-
-        var response = await cap.ExecuteAsync(BuildPatchRequest(distroName: "", "{}"));
-
-        Assert.False(response.Ok);
-        Assert.Contains("'distroName' is required", response.Error ?? "");
-    }
-
-    [Fact]
-    public async Task GatewayConfigPatch_RequiresPatchJson()
-    {
-        Environment.SetEnvironmentVariable(
-            TestHookCapability.RuntimeEnabledEnvironmentVariable, "1");
-        var cap = NewCapability(wsl: new FakeWslRunner());
-
-        var response = await cap.ExecuteAsync(BuildPatchRequest("OpenClawGateway", patchJson: ""));
-
-        Assert.False(response.Ok);
-        Assert.Contains("'patchJson' is required", response.Error ?? "");
-    }
-
-    [Fact]
     public async Task GatewayConfigPatch_WritesPatch_RunsConfigPatch_RunsConfigValidate()
     {
         // Same-path verification: the hook must invoke the same `openclaw config
         // patch --file ... && openclaw config validate` sequence the user runs
-        // by hand (per docs/GATEWAY_COMPAT_TESTING.md). This test asserts the
-        // exact command sequence rather than mocking behavior so a refactor
-        // can't quietly change what reaches WSL.
+        // by hand. Asserts the exact command sequence so a refactor can't
+        // quietly change what reaches WSL.
         Environment.SetEnvironmentVariable(
             TestHookCapability.RuntimeEnabledEnvironmentVariable, "1");
         var fake = new FakeWslRunner();
@@ -231,25 +121,20 @@ public class TestHookCapabilityTests : IDisposable
         Assert.True(doc.RootElement.GetProperty("patchOk").GetBoolean());
         Assert.True(doc.RootElement.GetProperty("validateOk").GetBoolean());
 
-        // Exact command sequence assertions:
         Assert.Equal(3, fake.Calls.Count);
-        // 1: cat patch into the WSL filesystem (base64-decoded).
         Assert.Equal("MyDistro", fake.Calls[0].Distro);
         Assert.Equal(new[] { "-u", "openclaw", "--", "bash", "-lc" }, fake.Calls[0].Args[..5]);
         Assert.Contains("base64 -d", fake.Calls[0].Args[5]);
         Assert.Contains("/home/openclaw/openclaw.patch.json5", fake.Calls[0].Args[5]);
-        // The decoded base64 must equal the original patch bytes.
         var base64Match = System.Text.RegularExpressions.Regex.Match(
             fake.Calls[0].Args[5], @"echo '([^']+)' \| base64");
         Assert.True(base64Match.Success);
         var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(base64Match.Groups[1].Value));
         Assert.Equal(patch, decoded);
-        // 2: openclaw config patch --file
         Assert.Equal(
             new[] { "-u", "openclaw", "--", "/opt/openclaw/bin/openclaw",
                     "config", "patch", "--file", "/home/openclaw/openclaw.patch.json5" },
             fake.Calls[1].Args);
-        // 3: openclaw config validate
         Assert.Equal(
             new[] { "-u", "openclaw", "--", "/opt/openclaw/bin/openclaw", "config", "validate" },
             fake.Calls[2].Args);
@@ -283,6 +168,8 @@ public class TestHookCapabilityTests : IDisposable
     [Fact]
     public async Task GatewayConfigPatch_SkipsPatchAndValidate_WhenWriteFails()
     {
+        // Driving a write failure from real WSL is hard (fill the disk?);
+        // unit test is the right level.
         Environment.SetEnvironmentVariable(
             TestHookCapability.RuntimeEnabledEnvironmentVariable, "1");
         var fake = new FakeWslRunner { WriteExitCode = 1, WriteStderr = "disk full" };
@@ -296,7 +183,6 @@ public class TestHookCapabilityTests : IDisposable
         Assert.False(doc.RootElement.GetProperty("writeOk").GetBoolean());
         Assert.False(doc.RootElement.GetProperty("patchOk").GetBoolean());
         Assert.False(doc.RootElement.GetProperty("validateOk").GetBoolean());
-        // Only the write call should have run.
         Assert.Single(fake.Calls);
     }
 
@@ -315,11 +201,6 @@ public class TestHookCapabilityTests : IDisposable
         IWslCommandRunner? wsl = null) =>
         new(new NullLogger(), diagnostics ?? TestHookDiagnostics.Empty, wsl);
 
-    /// <summary>
-    /// Records every WSL call the capability makes, lets the test scenario
-    /// control exit codes per phase. Keeps the unit test deterministic and
-    /// avoids needing real WSL on the dev machine.
-    /// </summary>
     private sealed class FakeWslRunner : IWslCommandRunner
     {
         public List<(string Distro, string[] Args)> Calls { get; } = new();
@@ -338,8 +219,6 @@ public class TestHookCapabilityTests : IDisposable
         {
             var argsArray = command.ToArray();
             Calls.Add((name, argsArray));
-            // Heuristic: classify by the command shape (matches the hook's
-            // three phases). This is the only place test order matters.
             var joined = string.Join(" ", argsArray);
             if (joined.Contains("base64 -d"))
                 return Task.FromResult(new WslCommandResult(WriteExitCode, string.Empty, WriteStderr));
@@ -360,4 +239,3 @@ public class TestHookCapabilityTests : IDisposable
             => Task.FromResult(new WslCommandResult(0, string.Empty, string.Empty));
     }
 }
-
