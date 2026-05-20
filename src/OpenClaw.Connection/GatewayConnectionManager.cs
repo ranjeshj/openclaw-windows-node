@@ -29,7 +29,7 @@ public sealed class GatewayConnectionManager : IGatewayConnectionManager
     private string? _activeIdentityPath; // identity directory for the active connection
     private string? _activeGatewayRecordId; // gateway record ID for node credential resolution
     private bool _disposed;
-    private bool _gatewayNeedsV2Signature; // remembered across reconnects
+    private bool _gatewayNeedsV2Signature = InitialV2SignaturePreference(); // remembered across reconnects
     private string? _lastAutoApprovedRequestId; // prevent auto-approve loops
     private string? _autoApproveInFlight; // atomic guard against concurrent approval of same requestId
 
@@ -78,6 +78,16 @@ public sealed class GatewayConnectionManager : IGatewayConnectionManager
     /// <summary>Internal access to the concrete client for auto-approve and other manager-internal operations.</summary>
     internal OpenClawGatewayClient? ConcreteOperatorClient => _activeLifecycle?.DataClient;
     public ConnectionDiagnostics Diagnostics => _diagnostics;
+
+    /// <summary>
+    /// Returns true if <c>OPENCLAW_TRAY_FORCE_V2_SIGNATURE</c> is set to "1",
+    /// which makes the manager start in v2-signature mode (skip the v3
+    /// probe entirely). Useful for test gateways where a single-use
+    /// bootstrap token would otherwise be consumed by the rejected v3
+    /// attempt before the v2 fallback retry can use it.
+    /// </summary>
+    private static bool InitialV2SignaturePreference()
+        => Environment.GetEnvironmentVariable("OPENCLAW_TRAY_FORCE_V2_SIGNATURE") == "1";
 
     // ─── Lifecycle ───
 
@@ -317,7 +327,7 @@ public sealed class GatewayConnectionManager : IGatewayConnectionManager
                 }
                 catch (Exception ex) { _logger.Warn($"[ConnMgr] Tunnel stop error on gateway switch: {ex.Message}"); }
             }
-            _gatewayNeedsV2Signature = false; // new gateway might support v3
+            _gatewayNeedsV2Signature = InitialV2SignaturePreference(); // new gateway might support v3
             _registry.SetActive(gatewayId);
             await ConnectCoreAsync(gatewayId);
         }
@@ -345,10 +355,11 @@ public sealed class GatewayConnectionManager : IGatewayConnectionManager
         // 3. Disconnect current gateway if any
         await DisconnectAsync();
 
-        // New gateway URL → reset v2 signature flag (new gateway might support v3)
+        // New gateway URL → reset v2 signature flag (new gateway might support v3).
+        // Honor OPENCLAW_TRAY_FORCE_V2_SIGNATURE override even on new gateway.
         var isNewGateway = _registry.FindByUrl(gatewayUrl) == null;
         if (isNewGateway)
-            _gatewayNeedsV2Signature = false;
+            _gatewayNeedsV2Signature = InitialV2SignaturePreference();
 
         // 4. Create or update gateway record
         var existing = _registry.FindByUrl(gatewayUrl);

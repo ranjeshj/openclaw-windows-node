@@ -379,6 +379,7 @@ public sealed class NodeService : IDisposable
         _logger.Info($"Capabilities registered: {string.Join(", ", _capabilities.Select(c => c.Category).Distinct(StringComparer.OrdinalIgnoreCase))} ({_capabilities.Count} caps)");
         } // end lock
 
+        RegisterTestHookCapabilityIfEnabled();
         StartMcpServer();
     }
 
@@ -389,9 +390,117 @@ public sealed class NodeService : IDisposable
     /// </summary>
     private void Register(INodeCapability capability)
     {
-        _capabilities.Add(capability);
-        _nodeClient?.RegisterCapability(capability);
+        Register(capability, registerOnGateway: true);
     }
+
+    /// <summary>
+    /// Overload that allows a capability to live in the local MCP surface
+    /// without being advertised to the gateway. Currently used only by the
+    /// compile-time-gated test-hook capability so a misbehaving (or hostile)
+    /// gateway can never trigger destructive hooks like
+    /// <c>tray.testhook.pairing.reset</c>.
+    /// </summary>
+    private void Register(INodeCapability capability, bool registerOnGateway)
+    {
+        _capabilities.Add(capability);
+        if (registerOnGateway)
+        {
+            _nodeClient?.RegisterCapability(capability);
+        }
+    }
+
+    /// <summary>
+    /// Register the <c>tray.testhook.*</c> capability when this binary was
+    /// compiled with <c>OpenClawEnableTestHooks=true</c>. Production binaries
+    /// do not compile the capability at all (see
+    /// <c>OpenClaw.Tray.Tests.ReleaseBuildExcludesTestHooksTests</c>), and
+    /// the capability itself second-gates on <c>OPENCLAW_TRAY_E2E=1</c> so an
+    /// E2E binary launched without the flag still refuses every tool call.
+    /// MCP-only — never advertised on the gateway.
+    /// </summary>
+    private void RegisterTestHookCapabilityIfEnabled()
+    {
+#if OPENCLAW_E2E_HOOKS
+        if (!OpenClawTray.Services.TestHooks.TestHookCapability.IsRuntimeEnabled())
+        {
+            _logger.Info("Test hooks compiled in but OPENCLAW_TRAY_E2E!=1; not registering tray.testhook.*");
+            return;
+        }
+        lock (_capabilitiesLock)
+        {
+            // Build a thin IWslCommandRunner reusing the same WslExeCommandRunner
+            // type the production LocalGatewaySetupEngine uses. The hook calls
+            // into it via the same RunInDistroAsync API the tray uses for every
+            // WSL operation — no parallel implementation.
+            var wsl = new OpenClawTray.Services.LocalGatewaySetup.WslExeCommandRunner(_logger, TimeSpan.FromMinutes(5));
+            // The App singleton implements ITestHookHost (in
+            // Services/TestHooks/App.TestHookHost.cs, compile-time gated).
+            // Pass it so the hook can invoke the SAME App methods the UI
+            // click handlers invoke. Cast via Microsoft.UI.Xaml.Application.Current
+            // to avoid a circular reference between NodeService and App.
+            var host = (Microsoft.UI.Xaml.Application.Current as OpenClawTray.App)
+                as OpenClawTray.Services.TestHooks.ITestHookHost;
+            var hook = new OpenClawTray.Services.TestHooks.TestHookCapability(
+                _logger,
+                BuildTestHookDiagnosticsSnapshot,
+                wsl,
+                host);
+            Register(hook, registerOnGateway: false);
+        }
+        _logger.Warn("Test hooks ENABLED (OPENCLAW_TRAY_E2E=1). tray.testhook.* registered on local MCP. This must NOT be a production build.");
+#endif
+    }
+
+#if OPENCLAW_E2E_HOOKS
+    /// <summary>
+    /// Build the pure-data snapshot consumed by
+    /// <c>tray.testhook.diagnostics.dump</c>. Intentionally a thin marshal
+    /// over already-known state — the capability itself stays
+    /// unit-testable.
+    /// </summary>
+    private OpenClawTray.Services.TestHooks.TestHookDiagnostics BuildTestHookDiagnosticsSnapshot()
+    {
+        var errors = new List<string>();
+        object? connection = null;
+        object? node = null;
+        object? pairing = null;
+        object? settingsSnapshot = null;
+        try
+        {
+            node = new
+            {
+                attached = _nodeClient != null,
+                capabilities = _capabilities
+                    .Where(c => !c.Category.StartsWith("tray.testhook", StringComparison.Ordinal))
+                    .Select(c => c.Category)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
+                commandCount = _capabilities
+                    .Where(c => !c.Category.StartsWith("tray.testhook", StringComparison.Ordinal))
+                    .SelectMany(c => c.Commands)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Count(),
+                gatewayUrl = _nodeClient?.GatewayUrl,
+            };
+        }
+        catch (Exception ex) { errors.Add("node: " + ex.Message); }
+
+        try
+        {
+            settingsSnapshot = new
+            {
+                enableNodeMode = _settings?.EnableNodeMode,
+                enableMcpServer = _settings?.EnableMcpServer,
+                autoStart = _settings?.AutoStart,
+                gatewayUrlFromSettings = _settings?.GetEffectiveGatewayUrl(),
+            };
+        }
+        catch (Exception ex) { errors.Add("settings: " + ex.Message); }
+
+        return new OpenClawTray.Services.TestHooks.TestHookDiagnostics(
+            connection, node, pairing, settingsSnapshot, errors);
+    }
+#endif
 
     /// <summary>
     /// Adopt a <see cref="WindowsNodeClient"/> created by an outside party
