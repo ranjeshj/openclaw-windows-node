@@ -186,11 +186,37 @@ internal static class GatewayCompatScenarios
     /// the gateway service can exit on its own and the tray's autopair
     /// races the gateway's pair-request registration.
     /// </summary>
+    private static readonly object _watchdogLogLock = new();
+    private static string? _watchdogLogPath;
+    private static string WatchdogLogPath()
+    {
+        if (_watchdogLogPath is not null) return _watchdogLogPath;
+        var dir = Environment.GetEnvironmentVariable("GATEWAY_COMPAT_LOG_DIR");
+        if (string.IsNullOrWhiteSpace(dir))
+            dir = System.IO.Path.GetTempPath();
+        try { System.IO.Directory.CreateDirectory(dir); } catch { /* ignore */ }
+        _watchdogLogPath = System.IO.Path.Combine(dir, "node-pair-watchdog.log");
+        return _watchdogLogPath;
+    }
+
+    private static void WatchdogLog(string message)
+    {
+        try
+        {
+            lock (_watchdogLogLock)
+            {
+                System.IO.File.AppendAllText(
+                    WatchdogLogPath(),
+                    DateTime.UtcNow.ToString("o") + " " + message + Environment.NewLine);
+            }
+        }
+        catch { /* swallow */ }
+    }
+
     private static async Task RunNodePairWatchdogAsync(System.Threading.CancellationToken ct)
     {
-        // Wait a short bit so the watchdog doesn't trample the initial
-        // install phases — those run for ~90 seconds before any pair
-        // request exists.
+        // Wait so we don't trample the pre-pair install phases (~90 s).
+        WatchdogLog("watchdog start; sleeping 60s before first tick");
         try { await Task.Delay(TimeSpan.FromSeconds(60), ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { return; }
 
@@ -198,29 +224,48 @@ internal static class GatewayCompatScenarios
         {
             try
             {
-                await RunWslOpenClawAsync("gateway", "start").ConfigureAwait(false);
-                var pending = await ListPendingPairRequestsAsync().ConfigureAwait(false);
+                var startResult = await RunWslOpenClawAsync("gateway", "start").ConfigureAwait(false);
+                WatchdogLog($"gateway start: exit={startResult.ExitCode} stderr={Truncate(startResult.Stderr)}");
+
+                var listResult = await RunWslOpenClawAsync("devices", "list", "--json").ConfigureAwait(false);
+                WatchdogLog($"devices list: exit={listResult.ExitCode} stdoutLen={listResult.Stdout?.Length ?? 0} stderr={Truncate(listResult.Stderr)}");
+                var pending = ParsePendingRequestIds(listResult.Stdout);
+                WatchdogLog($"pending request ids: [{string.Join(",", pending)}]");
                 foreach (var requestId in pending)
                 {
                     if (ct.IsCancellationRequested) break;
-                    await RunWslOpenClawAsync("devices", "approve", requestId).ConfigureAwait(false);
+                    var approveResult = await RunWslOpenClawAsync(
+                        "devices", "approve", requestId,
+                        "--url", "ws://localhost:18789",
+                        "--yes").ConfigureAwait(false);
+                    WatchdogLog($"approve {requestId}: exit={approveResult.ExitCode} stdout={Truncate(approveResult.Stdout)} stderr={Truncate(approveResult.Stderr)}");
                 }
             }
-            catch { /* swallow — the watchdog is best-effort */ }
+            catch (Exception ex)
+            {
+                WatchdogLog("tick threw: " + ex.GetType().Name + ": " + ex.Message);
+            }
 
             try { await Task.Delay(TimeSpan.FromSeconds(10), ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
         }
+        WatchdogLog("watchdog cancelled, exiting");
     }
 
-    private static async Task<System.Collections.Generic.List<string>> ListPendingPairRequestsAsync()
+    private static string Truncate(string? s)
     {
-        var result = await RunWslOpenClawAsync("devices", "list", "--json").ConfigureAwait(false);
+        if (string.IsNullOrEmpty(s)) return "";
+        s = s.Replace('\n', ' ').Replace('\r', ' ');
+        return s.Length > 200 ? s.Substring(0, 200) + "..." : s;
+    }
+
+    private static System.Collections.Generic.List<string> ParsePendingRequestIds(string? stdout)
+    {
         var requestIds = new System.Collections.Generic.List<string>();
-        if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Stdout)) return requestIds;
+        if (string.IsNullOrWhiteSpace(stdout)) return requestIds;
         try
         {
-            using var doc = JsonDocument.Parse(result.Stdout);
+            using var doc = JsonDocument.Parse(stdout);
             if (doc.RootElement.TryGetProperty("pending", out var pending)
                 && pending.ValueKind == JsonValueKind.Array)
             {
@@ -235,13 +280,15 @@ internal static class GatewayCompatScenarios
                 }
             }
         }
-        catch (JsonException) { /* ignore malformed payloads */ }
+        catch (JsonException) { /* ignore */ }
         return requestIds;
     }
 
     /// <summary>
-    /// Runs <c>wsl -d OpenClawGateway -u openclaw -- /opt/openclaw/bin/openclaw &lt;args&gt;</c>
-    /// and returns stdout/stderr/exit. Best-effort: never throws.
+    /// Runs <c>wsl -d OpenClawGateway -u openclaw -- bash -lc "openclaw &lt;args&gt;"</c>.
+    /// Uses a login shell so the openclaw user's PATH + env (including
+    /// OPENCLAW_PROFILE / OPENCLAW_STATE_DIR) are populated the same way
+    /// they would be for an interactive shell. Best-effort: never throws.
     /// </summary>
     public static async Task<(int ExitCode, string Stdout, string Stderr)> RunWslOpenClawAsync(params string[] args)
     {
@@ -260,8 +307,18 @@ internal static class GatewayCompatScenarios
         psi.ArgumentList.Add("-u");
         psi.ArgumentList.Add("openclaw");
         psi.ArgumentList.Add("--");
-        psi.ArgumentList.Add("/opt/openclaw/bin/openclaw");
-        foreach (var a in args) psi.ArgumentList.Add(a);
+        psi.ArgumentList.Add("bash");
+        psi.ArgumentList.Add("-lc");
+        // Quote each arg for the bash subshell.
+        var cmd = new System.Text.StringBuilder("/opt/openclaw/bin/openclaw");
+        foreach (var a in args)
+        {
+            cmd.Append(' ');
+            cmd.Append('\'');
+            cmd.Append(a.Replace("'", "'\\''", StringComparison.Ordinal));
+            cmd.Append('\'');
+        }
+        psi.ArgumentList.Add(cmd.ToString());
 
         try
         {
