@@ -433,10 +433,18 @@ public sealed class NodeService : IDisposable
             // into it via the same RunInDistroAsync API the tray uses for every
             // WSL operation — no parallel implementation.
             var wsl = new OpenClawTray.Services.LocalGatewaySetup.WslExeCommandRunner(_logger, TimeSpan.FromMinutes(5));
+            // The App singleton implements ITestHookHost (in
+            // Services/TestHooks/App.TestHookHost.cs, compile-time gated).
+            // Pass it so the hook can invoke the SAME App methods the UI
+            // click handlers invoke. Cast via Microsoft.UI.Xaml.Application.Current
+            // to avoid a circular reference between NodeService and App.
+            var host = (Microsoft.UI.Xaml.Application.Current as OpenClawTray.App)
+                as OpenClawTray.Services.TestHooks.ITestHookHost;
             var hook = new OpenClawTray.Services.TestHooks.TestHookCapability(
                 _logger,
                 BuildTestHookDiagnosticsSnapshot,
-                wsl);
+                wsl,
+                host);
             Register(hook, registerOnGateway: false);
         }
         _logger.Warn("Test hooks ENABLED (OPENCLAW_TRAY_E2E=1). tray.testhook.* registered on local MCP. This must NOT be a production build.");
