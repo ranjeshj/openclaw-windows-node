@@ -216,8 +216,8 @@ internal static class GatewayCompatScenarios
     private static async Task RunNodePairWatchdogAsync(System.Threading.CancellationToken ct)
     {
         // Wait so we don't trample the pre-pair install phases (~90 s).
-        WatchdogLog("watchdog start; sleeping 60s before first tick");
-        try { await Task.Delay(TimeSpan.FromSeconds(60), ct).ConfigureAwait(false); }
+        WatchdogLog("watchdog start; sleeping 120s before first tick");
+        try { await Task.Delay(TimeSpan.FromSeconds(120), ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { return; }
 
         while (!ct.IsCancellationRequested)
@@ -228,7 +228,7 @@ internal static class GatewayCompatScenarios
                 WatchdogLog($"gateway start: exit={startResult.ExitCode} stderr={Truncate(startResult.Stderr)}");
 
                 var listResult = await RunWslOpenClawAsync("devices", "list", "--json").ConfigureAwait(false);
-                WatchdogLog($"devices list: exit={listResult.ExitCode} stdoutLen={listResult.Stdout?.Length ?? 0} stderr={Truncate(listResult.Stderr)}");
+                WatchdogLog($"devices list: exit={listResult.ExitCode} stdoutLen={listResult.Stdout?.Length ?? 0} stdout={Truncate(listResult.Stdout)} stderr={Truncate(listResult.Stderr)}");
                 var pending = ParsePendingRequestIds(listResult.Stdout);
                 WatchdogLog($"pending request ids: [{string.Join(",", pending)}]");
                 foreach (var requestId in pending)
@@ -256,7 +256,7 @@ internal static class GatewayCompatScenarios
     {
         if (string.IsNullOrEmpty(s)) return "";
         s = s.Replace('\n', ' ').Replace('\r', ' ');
-        return s.Length > 200 ? s.Substring(0, 200) + "..." : s;
+        return s.Length > 500 ? s.Substring(0, 500) + "..." : s;
     }
 
     private static System.Collections.Generic.List<string> ParsePendingRequestIds(string? stdout)
