@@ -1,0 +1,7 @@
+{
+  "$schema": "./docs/schemas/gateway-lkg.schema.json",
+  "version": "2026.5.17",
+  "verifiedAt": "2026-05-19T00:00:00Z",
+  "verifiedTrayRef": "initial-pin",
+  "notes": "Last-Known-Good openclaw gateway npm package version that the tray ships with by default. Bumped by .github/workflows/gateway-lkg-bump.yml after the full gateway-compat suite passes against a newer published version. Runtime override: set OPENCLAW_GATEWAY_VERSION env var (e.g. 'latest' or '2026.5.18') before launching the tray; useful in CI and for hands-on validation."
+}

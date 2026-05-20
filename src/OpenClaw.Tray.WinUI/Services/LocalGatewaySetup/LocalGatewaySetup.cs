@@ -73,7 +73,7 @@ public sealed record LocalGatewaySetupOptions
     public string BaseDistroName { get; init; } = "Ubuntu-24.04";
     public string? InstanceInstallLocation { get; init; }
     public string OpenClawInstallPrefix { get; init; } = "/opt/openclaw";
-    public string OpenClawInstallVersion { get; init; } = "latest";
+    public string OpenClawInstallVersion { get; init; } = OpenClaw.Shared.GatewayLkg.Version;
     public string OpenClawInstallMethod { get; init; } = "npm";
     public string OpenClawInstallerUrl { get; init; } = "https://openclaw.ai/install-cli.sh";
     public bool AllowExistingDistro { get; init; }
@@ -92,10 +92,12 @@ public sealed class ProcessLocalGatewaySetupEnvironment : ILocalGatewaySetupEnvi
 
 public sealed record LocalGatewaySetupRuntimeConfiguration(
     string? DistroName,
-    bool AllowExistingDistro)
+    bool AllowExistingDistro,
+    string? OpenClawInstallVersion)
 {
     public const string DistroNameVariable = "OPENCLAW_WSL_DISTRO_NAME";
     public const string AllowExistingDistroVariable = "OPENCLAW_WSL_ALLOW_EXISTING_DISTRO";
+    public const string OpenClawInstallVersionVariable = OpenClaw.Shared.GatewayLkg.VersionOverrideEnvironmentVariable;
 
     public static LocalGatewaySetupRuntimeConfiguration FromEnvironment(ILocalGatewaySetupEnvironment? environment = null)
     {
@@ -106,7 +108,11 @@ public sealed record LocalGatewaySetupRuntimeConfiguration(
 #else
             null,
 #endif
-            IsTruthy(environment.GetVariable(AllowExistingDistroVariable)));
+            IsTruthy(environment.GetVariable(AllowExistingDistroVariable)),
+            // Version override is intentionally available in Release builds so CI matrices
+            // and hands-on validation can pin to "latest" or a candidate version without
+            // rebuilding the installer. The default (when unset) is GatewayLkg.Version.
+            NullIfWhiteSpace(environment.GetVariable(OpenClawInstallVersionVariable)));
     }
 
     private static bool IsTruthy(string? value)
@@ -3930,6 +3936,8 @@ public static class LocalGatewaySetupEngineFactory
             GatewayUrl = settings.GetEffectiveGatewayUrl(),
             DistroName = ResolveDistroName(runtime, distroName),
             AllowExistingDistro = allowExistingDistro || runtime.AllowExistingDistro || replaceExistingConfigurationConfirmed,
+            // Honor OPENCLAW_GATEWAY_VERSION override (CI / hands-on); fall back to LKG default in the record.
+            OpenClawInstallVersion = runtime.OpenClawInstallVersion ?? OpenClaw.Shared.GatewayLkg.Version,
 #if OPENCLAW_TRAY_TESTS
             EnableWindowsTrayNodeByDefault = settings.EnableNodeMode
 #else
