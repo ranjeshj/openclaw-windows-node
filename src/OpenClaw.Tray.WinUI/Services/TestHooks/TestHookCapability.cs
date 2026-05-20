@@ -128,24 +128,38 @@ internal sealed class TestHookCapability : NodeCapabilityBase
 
         var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(patchJson));
         var writeScript = $"echo {ShellEscape(base64)} | base64 -d > {ShellEscape(patchPath)}";
-        // Use RunAsync (not RunInDistroAsync) so we can include "-u <user>"
-        // alongside "-d <distro>". RunInDistroAsync prepends "-d name --"
-        // automatically, which when combined with the "-u" after it leads
-        // to a double "--" that ends wsl arg parsing prematurely (caught by
-        // the first PR-triggered run: "bash: - : invalid option").
-        // This matches the production pattern at
-        // LocalGatewaySetup.cs:993 ("bash -lc $script" with explicit -u openclaw).
         var writeResult = await _wslRunner.RunAsync(
             new[] { "-d", distroName, "-u", wslUser, "--", "bash", "-lc", writeScript },
             cts.Token).ConfigureAwait(false);
 
+        // openclaw config patch is read-modify-write and can race with the
+        // gateway's own config writes, throwing ConfigMutationConflictError:
+        // "config changed since last load". Retry a few times with backoff -
+        // observed on PR run 26143696116.
         WslCommandResult? patchResult = null, validateResult = null;
         if (writeResult.Success)
         {
-            patchResult = await _wslRunner.RunAsync(
-                new[] { "-d", distroName, "-u", wslUser, "--", openclawBin, "config", "patch", "--file", patchPath },
-                cts.Token).ConfigureAwait(false);
-            if (patchResult.Success)
+            const int maxPatchAttempts = 5;
+            for (var attempt = 1; attempt <= maxPatchAttempts; attempt++)
+            {
+                patchResult = await _wslRunner.RunAsync(
+                    new[] { "-d", distroName, "-u", wslUser, "--", openclawBin, "config", "patch", "--file", patchPath },
+                    cts.Token).ConfigureAwait(false);
+                if (patchResult.Success) break;
+                var combined = (patchResult.StandardOutput ?? "") + (patchResult.StandardError ?? "");
+                if (!combined.Contains("ConfigMutationConflictError", StringComparison.Ordinal)
+                    && !combined.Contains("config changed since last load", StringComparison.Ordinal))
+                {
+                    // Non-conflict failure - don't retry.
+                    break;
+                }
+                if (attempt < maxPatchAttempts)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(500 * attempt), cts.Token).ConfigureAwait(false);
+                }
+            }
+
+            if (patchResult is { Success: true })
                 validateResult = await _wslRunner.RunAsync(
                     new[] { "-d", distroName, "-u", wslUser, "--", openclawBin, "config", "validate" },
                     cts.Token).ConfigureAwait(false);
