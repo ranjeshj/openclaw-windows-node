@@ -26,16 +26,52 @@ Env vars: `FAKE_LLM_PORT` (default `18888`), `FAKE_LLM_BIND` (default
 
 ## Configure openclaw to use it
 
-The W0 spike workflow (`.github/workflows/gateway-compat-spike.yml`) is the
-authoritative source for the correct provider config shape — it runs
-`openclaw config validate` so any shape drift fails loudly. Approximate
-shape:
+**Schema verified against `openclaw 2026.5.18`** by `.github/workflows/gateway-compat-spike.yml` (run 26138294682). The canonical schema can always be re-printed with `openclaw config schema`.
+
+The cleanest way is `openclaw config patch --file ./fake-provider.patch.json5`
+with this JSON5 patch:
+
+```json5
+{
+  models: {
+    providers: {
+      fake: {
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:18888/v1",
+        apiKey: "test",
+        authMode: "api-key",
+        models: [
+          { id: "fake-llm" }
+        ]
+      }
+    }
+  },
+  agents: {
+    defaults: {
+      model: { primary: "fake/fake-llm" }
+    }
+  }
+}
+```
+
+…then validate:
 
 ```sh
-openclaw config set agents.providers.fake.api openai-completions
-openclaw config set agents.providers.fake.baseUrl http://127.0.0.1:18888/v1
-openclaw config set agents.providers.fake.apiKey test
-openclaw config set agents.providers.fake.models.0.id fake-llm
+openclaw config patch --file ./fake-provider.patch.json5
+openclaw config validate    # must exit 0
+```
+
+Equivalent `config set` calls (each path verified accepted by the
+2026.5.18 schema; the *previous* `agents.providers.fake.*` path that
+older docs used is **rejected** — use `models.providers` instead):
+
+```sh
+openclaw config set models.providers.fake.api openai-completions
+openclaw config set models.providers.fake.baseUrl http://127.0.0.1:18888/v1
+openclaw config set models.providers.fake.apiKey test
+openclaw config set models.providers.fake.authMode api-key
+openclaw config set models.providers.fake.models '[{"id":"fake-llm"}]' --strict-json
 openclaw config set agents.defaults.model.primary fake/fake-llm
 openclaw config validate
 ```
+

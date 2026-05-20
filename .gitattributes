@@ -1,1 +1,6 @@
 .github/workflows/*.lock.yml linguist-generated=true merge=ours
+
+# Shell scripts that run inside WSL/Linux MUST keep LF line endings even
+# when checked out on Windows. CRLF breaks "set -euo pipefail" and friends
+# (the trailing \r becomes part of the token, bash rejects it).
+*.sh text eol=lf

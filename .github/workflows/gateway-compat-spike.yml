@@ -35,29 +35,55 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Register WSL path helper (pwsh)
+        shell: pwsh
+        # PowerShell function that converts C:\foo\bar -> /mnt/c/foo/bar. Used by
+        # every subsequent step that needs to hand a Windows path to a WSL command.
+        run: |
+          $helper = @'
+          function global:ConvertTo-WslPath([string]$path) {
+            $p = ($path -replace '\\','/').TrimEnd('/')
+            if ($p -match '^([A-Za-z]):/(.*)$') {
+              return "/mnt/" + $matches[1].ToLower() + "/" + $matches[2]
+            }
+            return $p
+          }
+          '@
+          $profileDir = Split-Path -Parent $PROFILE.CurrentUserAllHosts
+          New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+          $helper | Out-File -FilePath $PROFILE.CurrentUserAllHosts -Encoding utf8 -Append
+          Write-Host "Wrote ConvertTo-WslPath helper to $($PROFILE.CurrentUserAllHosts)"
+
       - name: WSL host diagnostics
         shell: pwsh
+        # Diagnostic step only; never fail the job here. WSL commands that
+        # return non-zero (e.g. `wsl --list --verbose` when no distros are
+        # registered) are expected on a fresh runner and are themselves data.
+        continue-on-error: true
         run: |
+          # wsl.exe emits UTF-16 LE; decode it so the log is readable.
+          [Console]::OutputEncoding = [System.Text.Encoding]::Unicode
           $sw = [System.Diagnostics.Stopwatch]::StartNew()
-          Write-Host "::group::wsl --version"
-          wsl --version
-          Write-Host "::endgroup::"
-          Write-Host "::group::wsl --status"
-          wsl --status
-          Write-Host "::endgroup::"
-          Write-Host "::group::wsl --list --verbose"
-          wsl --list --verbose
-          Write-Host "::endgroup::"
-          Write-Host "::group::wsl --list --online (first 20 lines)"
-          wsl --list --online | Select-Object -First 20
-          Write-Host "::endgroup::"
+          function Run-Diagnostic($label, [ScriptBlock]$body) {
+            Write-Host "::group::$label"
+            try { & $body | Out-Host } catch { Write-Host "(error: $($_.Exception.Message))" }
+            Write-Host "(exit=$LASTEXITCODE)"
+            $global:LASTEXITCODE = 0
+            Write-Host "::endgroup::"
+          }
+          Run-Diagnostic "wsl --version" { wsl --version }
+          Run-Diagnostic "wsl --status" { wsl --status }
+          Run-Diagnostic "wsl --list --verbose" { wsl --list --verbose }
+          Run-Diagnostic "wsl --list --online" { wsl --list --online }
           $sw.Stop()
           "wsl_diagnostics_seconds=$([math]::Round($sw.Elapsed.TotalSeconds,1))" | Out-File -Append $env:GITHUB_OUTPUT
+          $global:LASTEXITCODE = 0
         id: diag
 
       - name: Install Ubuntu-24.04 distro
         shell: pwsh
         run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::Unicode
           $sw = [System.Diagnostics.Stopwatch]::StartNew()
           # Match the production install command used by LocalGatewaySetup:
           #   wsl --install Ubuntu-24.04 --name OpenClawGateway --no-launch --version 2
@@ -65,46 +91,38 @@ jobs:
           wsl --install Ubuntu-24.04 --no-launch --version 2
           if ($LASTEXITCODE -ne 0) { throw "wsl --install failed with $LASTEXITCODE" }
           $sw.Stop()
-          Write-Host "Distro install: $($sw.Elapsed.TotalSeconds)s"
+          Write-Host "Distro install: $([math]::Round($sw.Elapsed.TotalSeconds,1))s"
           wsl --list --verbose
 
       - name: Provision openclaw user inside distro
         shell: pwsh
         run: |
-          # Production LocalGatewaySetup creates an 'openclaw' user; mirror that here.
-          $script = @"
-          set -euo pipefail
-          if ! id -u openclaw >/dev/null 2>&1; then
-            useradd -m -s /bin/bash openclaw
-            usermod -aG sudo openclaw
-            echo 'openclaw ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/openclaw
-            chmod 440 /etc/sudoers.d/openclaw
-          fi
-          mkdir -p /opt/openclaw
-          chown openclaw:openclaw /opt/openclaw
-          "@
-          $script | wsl -d Ubuntu-24.04 -u root -- bash -lc 'cat | bash -s'
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $script = ConvertTo-WslPath (Join-Path $env:GITHUB_WORKSPACE "tools/spike/provision.sh")
+          wsl -d Ubuntu-24.04 -u root -- bash -lc "bash $script"
           if ($LASTEXITCODE -ne 0) { throw "openclaw user provision failed with $LASTEXITCODE" }
 
       - name: Install openclaw gateway (mirrors LocalGatewaySetup)
         shell: pwsh
         run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           $sw = [System.Diagnostics.Stopwatch]::StartNew()
           $version = $env:OPENCLAW_GATEWAY_VERSION
           if (-not $version) { $version = "latest" }
           Write-Host "Installing openclaw@$version via install-cli.sh"
-          # Same command shape as OpenClawInstallCliLinuxInstaller.InstallAsync.
+          # Inline command is safe (no embedded scripts, just shell flags).
           $cmd = "curl -fsSL --proto '=https' --tlsv1.2 'https://openclaw.ai/install-cli.sh' | " +
                  "OPENCLAW_PREFIX='/opt/openclaw' OPENCLAW_INSTALL_METHOD='npm' OPENCLAW_VERSION='$version' " +
                  "SHARP_IGNORE_GLOBAL_LIBVIPS=1 bash -s -- --json --prefix '/opt/openclaw' --version '$version' --no-onboard"
           wsl -d Ubuntu-24.04 -u openclaw -- bash -lc $cmd
           if ($LASTEXITCODE -ne 0) { throw "openclaw install failed with $LASTEXITCODE" }
           $sw.Stop()
-          Write-Host "Gateway install: $($sw.Elapsed.TotalSeconds)s"
+          Write-Host "Gateway install: $([math]::Round($sw.Elapsed.TotalSeconds,1))s"
 
       - name: Verify openclaw CLI
         shell: pwsh
         run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           wsl -d Ubuntu-24.04 -u openclaw -- /opt/openclaw/bin/openclaw --version
           if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with $LASTEXITCODE" }
           wsl -d Ubuntu-24.04 -u openclaw -- /opt/openclaw/bin/openclaw --help | Select-Object -First 40
@@ -112,57 +130,20 @@ jobs:
       - name: Start fake LLM server inside WSL
         shell: pwsh
         run: |
-          # Copy server.mjs into the distro and launch via nohup so it survives this step.
-          $repo = ($env:GITHUB_WORKSPACE -replace '\\','/').TrimEnd('/')
-          $wslRepo = "/mnt/" + ($repo.Substring(0,1).ToLower()) + $repo.Substring(2)
-          Write-Host "WSL repo path: $wslRepo"
-          $launch = @"
-          set -euo pipefail
-          mkdir -p /home/openclaw/fake-llm
-          cp '$wslRepo/tools/fake-llm-server/server.mjs' /home/openclaw/fake-llm/server.mjs
-          # Node ships in Ubuntu-24.04's universe repo as `nodejs`; install if missing.
-          if ! command -v node >/dev/null 2>&1; then
-            sudo apt-get update -qq
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
-          fi
-          node --version
-          nohup env FAKE_LLM_PORT=$env:FAKE_LLM_PORT FAKE_LLM_BIND=127.0.0.1 \
-            node /home/openclaw/fake-llm/server.mjs \
-            > /home/openclaw/fake-llm/server.log 2>&1 &
-          sleep 2
-          curl -fsS http://127.0.0.1:$env:FAKE_LLM_PORT/ && echo
-          curl -fsS -X POST -H 'content-type: application/json' \
-            -d '{"model":"fake-llm","messages":[{"role":"user","content":"spike ping"}]}' \
-            http://127.0.0.1:$env:FAKE_LLM_PORT/v1/chat/completions
-          "@
-          wsl -d Ubuntu-24.04 -u openclaw -- bash -lc $launch
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $script = ConvertTo-WslPath (Join-Path $env:GITHUB_WORKSPACE "tools/spike/start-fake-llm.sh")
+          $repoWsl = ConvertTo-WslPath $env:GITHUB_WORKSPACE
+          $port = $env:FAKE_LLM_PORT
+          wsl -d Ubuntu-24.04 -u openclaw -- bash -lc "REPO_WSL_PATH='$repoWsl' FAKE_LLM_PORT='$port' bash $script"
           if ($LASTEXITCODE -ne 0) { throw "fake-llm bring-up failed with $LASTEXITCODE" }
 
       - name: Configure openclaw to use fake LLM and validate
         shell: pwsh
         run: |
-          # Try the openclaw config set / validate path. Capture exit codes per call so
-          # we can see exactly which key shape the CLI accepts. This is the
-          # authoritative "what does the config schema look like today" probe.
-          $script = @"
-          set +e
-          OC=/opt/openclaw/bin/openclaw
-          echo '--- agents.providers.fake.api ---'
-          \$OC config set agents.providers.fake.api openai-completions; echo exit=\$?
-          echo '--- agents.providers.fake.baseUrl ---'
-          \$OC config set agents.providers.fake.baseUrl http://127.0.0.1:$env:FAKE_LLM_PORT/v1; echo exit=\$?
-          echo '--- agents.providers.fake.apiKey ---'
-          \$OC config set agents.providers.fake.apiKey test; echo exit=\$?
-          echo '--- agents.providers.fake.models.0.id ---'
-          \$OC config set agents.providers.fake.models.0.id fake-llm; echo exit=\$?
-          echo '--- agents.defaults.model.primary ---'
-          \$OC config set agents.defaults.model.primary fake/fake-llm; echo exit=\$?
-          echo '--- openclaw config validate ---'
-          \$OC config validate; echo validate_exit=\$?
-          echo '--- openclaw config get (sanitized snapshot) ---'
-          \$OC config get | sed 's/\(apiKey[^,]*\):"[^"]*"/\1:"<redacted>"/g'
-          "@
-          wsl -d Ubuntu-24.04 -u openclaw -- bash -lc $script | Tee-Object -FilePath openclaw-config-spike.log
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $script = ConvertTo-WslPath (Join-Path $env:GITHUB_WORKSPACE "tools/spike/config-probe.sh")
+          $port = $env:FAKE_LLM_PORT
+          wsl -d Ubuntu-24.04 -u openclaw -- bash -lc "FAKE_LLM_PORT='$port' bash $script" | Tee-Object -FilePath openclaw-config-spike.log
           # We do NOT fail the job here even if validate exits non-zero; the whole point
           # of the spike is to record the actual config shape so we can correct the
           # production harness before W3 work begins.
@@ -182,6 +163,7 @@ jobs:
           name: gateway-compat-spike
           path: |
             openclaw-config-spike.log
+            openclaw-schema.json
           if-no-files-found: warn
 
       - name: Cleanup distro
