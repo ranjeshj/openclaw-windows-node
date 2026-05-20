@@ -16,39 +16,38 @@ internal static class GatewayCompatScenarios
     public const string DistroName = "Ubuntu-24.04";
 
     /// <summary>
-    /// Verified against openclaw 2026.5.18 by the W0 spike, then refined
-    /// via PR-triggered runs (26142893903 and predecessors) which surfaced
-    /// the real required shape per <c>openclaw config validate</c>:
-    /// models.providers.&lt;id&gt;.models[] requires BOTH id and name plus
-    /// reasoning/input/cost/contextWindow/maxTokens. The full shape comes
-    /// from openclaw's own internal test fixture
-    /// (src/config/model-alias-defaults.test.ts in the gateway repo).
+    /// Verified against openclaw 2026.5.18. The schema lives at
+    /// src/config/zod-schema.core.ts:319 in the gateway repo
+    /// (ModelDefinitionSchema, .strict()), and uses BOTH id and name
+    /// (both required, min length 1).
+    ///
+    /// Uses strict JSON (not JSON5) to sidestep parser ambiguity.
     /// </summary>
     public static string FakeLlmProviderPatch(string fakeLlmPort) => $$"""
         {
-          models: {
-            providers: {
-              fake: {
-                api: "openai-completions",
-                baseUrl: "http://127.0.0.1:{{fakeLlmPort}}/v1",
-                apiKey: "test",
-                auth: "api-key",
-                models: [
+          "models": {
+            "providers": {
+              "fake": {
+                "api": "openai-completions",
+                "baseUrl": "http://127.0.0.1:{{fakeLlmPort}}/v1",
+                "apiKey": "test",
+                "auth": "api-key",
+                "models": [
                   {
-                    id: "fake-llm",
-                    name: "fake-llm",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 200000,
-                    maxTokens: 4096
+                    "id": "fake-llm",
+                    "name": "fake-llm",
+                    "reasoning": false,
+                    "input": ["text"],
+                    "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+                    "contextWindow": 200000,
+                    "maxTokens": 4096
                   }
                 ]
               }
             }
           },
-          agents: {
-            defaults: { model: { primary: "fake/fake-llm" } }
+          "agents": {
+            "defaults": { "model": { "primary": "fake/fake-llm" } }
           }
         }
         """;
