@@ -253,8 +253,7 @@ internal static class GatewayCompatScenarios
                 {
                     if (ct.IsCancellationRequested) break;
                     var approveResult = await RunWslOpenClawAsync(
-                        "devices", "approve", requestId,
-                        "--url", "ws://localhost:18789").ConfigureAwait(false);
+                        "devices", "approve", requestId).ConfigureAwait(false);
                     WatchdogLog($"approve {requestId}: exit={approveResult.ExitCode} stdout={Truncate(approveResult.Stdout)} stderr={Truncate(approveResult.Stderr)}");
                 }
             }
