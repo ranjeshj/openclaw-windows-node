@@ -224,8 +224,26 @@ internal static class GatewayCompatScenarios
         {
             try
             {
-                var startResult = await RunWslOpenClawAsync("gateway", "start").ConfigureAwait(false);
-                WatchdogLog($"gateway start: exit={startResult.ExitCode} stderr={Truncate(startResult.Stderr)}");
+                // Plan-A workaround: the in-tray `openclaw gateway start`
+                // command claims success but the spawned node process
+                // crashes within seconds (no Restart= unit). The
+                // watchdog log shows every devices-list call returning
+                // "gateway closed (1006 abnormal closure)" — so a) start
+                // didn't actually keep it up, and b) nothing brings it
+                // back. Spawn the gateway ourselves via nohup. Idempotent:
+                // pgrep skips if a node ... gateway --port 18789 is already
+                // running.
+                var spawnResult = await RunWslBashAsync(
+                    "if ! pgrep -f 'openclaw/dist/index.js gateway --port 18789' >/dev/null 2>&1; then " +
+                      "nohup /opt/openclaw/bin/openclaw gateway --port 18789 " +
+                        "> /home/openclaw/openclaw-gateway-watchdog.log 2>&1 & " +
+                      "disown; " +
+                    "fi").ConfigureAwait(false);
+                WatchdogLog($"spawn nohup gateway: exit={spawnResult.ExitCode} stdout={Truncate(spawnResult.Stdout)} stderr={Truncate(spawnResult.Stderr)}");
+
+                // Give the gateway a couple seconds to bind 18789 before
+                // querying it.
+                await Task.Delay(TimeSpan.FromSeconds(3), ct).ConfigureAwait(false);
 
                 var listResult = await RunWslOpenClawAsync("devices", "list", "--json").ConfigureAwait(false);
                 WatchdogLog($"devices list: exit={listResult.ExitCode} stdoutLen={listResult.Stdout?.Length ?? 0} stdout={Truncate(listResult.Stdout)} stderr={Truncate(listResult.Stderr)}");
@@ -250,6 +268,43 @@ internal static class GatewayCompatScenarios
             catch (OperationCanceledException) { return; }
         }
         WatchdogLog("watchdog cancelled, exiting");
+    }
+
+    /// <summary>
+    /// Runs a raw bash command via <c>wsl -d OpenClawGateway -u openclaw -- bash -lc &lt;cmd&gt;</c>.
+    /// Best-effort: never throws.
+    /// </summary>
+    public static async Task<(int ExitCode, string Stdout, string Stderr)> RunWslBashAsync(string bashCommand)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "wsl.exe",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
+        };
+        psi.ArgumentList.Add("-d");
+        psi.ArgumentList.Add(DistroName);
+        psi.ArgumentList.Add("-u");
+        psi.ArgumentList.Add("openclaw");
+        psi.ArgumentList.Add("--");
+        psi.ArgumentList.Add("bash");
+        psi.ArgumentList.Add("-lc");
+        psi.ArgumentList.Add(bashCommand);
+
+        try
+        {
+            using var p = System.Diagnostics.Process.Start(psi);
+            if (p is null) return (-1, "", "Process.Start returned null");
+            var so = await p.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
+            var se = await p.StandardError.ReadToEndAsync().ConfigureAwait(false);
+            await p.WaitForExitAsync().ConfigureAwait(false);
+            return (p.ExitCode, so, se);
+        }
+        catch (Exception ex) { return (-1, "", ex.Message); }
     }
 
     private static string Truncate(string? s)
