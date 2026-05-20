@@ -26,13 +26,13 @@ namespace OpenClaw.Shared;
 public static class GatewayLkg
 {
     /// <summary>npm package version string for the LKG gateway.</summary>
-    public const string Version = "2026.5.17";
+    public const string Version = "2026.5.18";
 
     /// <summary>ISO-8601 UTC timestamp at which this version was last verified by CI.</summary>
-    public const string VerifiedAt = "2026-05-19T00:00:00Z";
+    public const string VerifiedAt = "2026-05-20T04:50:00Z";
 
     /// <summary>Tray git ref (commit SHA or tag) that verified this version.</summary>
-    public const string VerifiedTrayRef = "initial-pin";
+    public const string VerifiedTrayRef = "spike-run-26138294682";
 
     /// <summary>Environment variable name to override the LKG version at runtime.</summary>
     public const string VersionOverrideEnvironmentVariable = "OPENCLAW_GATEWAY_VERSION";
