@@ -1,7 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <DefineConstants>$(DefineConstants);OPENCLAW_TRAY_TESTS</DefineConstants>
+    <DefineConstants>$(DefineConstants);OPENCLAW_TRAY_TESTS;OPENCLAW_E2E_HOOKS</DefineConstants>
+    <!--
+      OPENCLAW_TRAY_TESTS: long-standing constant used by tray code to take
+      test-only branches (e.g. fake-WSL discovery).
+      OPENCLAW_E2E_HOOKS: compiles the tray.testhook.* capability so we can
+      unit-test it. The release-build smoke test
+      (ReleaseBuildExcludesTestHooksTests) verifies that the shipped tray
+      binary itself does NOT have this constant defined.
+    -->
     <!--
       CI builds the tests with `-r win-x64` plus `no-restore` so the same
       restore output drives Tray.Tests, IntegrationTests, and UITests.
@@ -63,6 +71,7 @@
     <Compile Include="..\..\src\OpenClaw.Tray.WinUI\Helpers\GatewayChatUrlBuilder.cs" Link="Imported\GatewayChatUrlBuilder.cs" />
     <Compile Include="..\..\src\OpenClaw.Tray.WinUI\Onboarding\Services\LocalGatewayApprover.cs" Link="Imported\LocalGatewayApprover.cs" />
     <Compile Include="..\..\src\OpenClaw.Tray.WinUI\Services\LocalGatewaySetup\LocalGatewaySetup.cs" Link="Imported\LocalGatewaySetup.cs" />
+    <Compile Include="..\..\src\OpenClaw.Tray.WinUI\Services\TestHooks\TestHookCapability.cs" Link="Imported\TestHookCapability.cs" />
     <Compile Include="..\..\src\OpenClaw.Tray.WinUI\Services\LocalGatewaySetup\LocalGatewayUninstall.cs" Link="Imported\LocalGatewayUninstall.cs" />
     <Compile Include="..\..\src\OpenClaw.Tray.WinUI\Onboarding\Services\GatewayHealthCheck.cs" Link="Imported\GatewayHealthCheck.cs" />
     <Compile Include="..\..\src\OpenClaw.Tray.WinUI\Onboarding\Services\InputValidator.cs" Link="Imported\InputValidator.cs" />

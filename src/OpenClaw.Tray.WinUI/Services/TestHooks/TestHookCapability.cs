@@ -3,36 +3,147 @@
 // ============================================================================
 //  Gateway-compat E2E test hooks.
 //
-//  This file is compiled ONLY when MSBuild property OpenClawEnableTestHooks
-//  is true (see OpenClaw.Tray.WinUI.csproj). It registers a `tray.testhook.*`
-//  MCP tool surface on McpToolBridge that lets the gateway-compat harness
-//  drive local-setup, gateway config, pairing reset, etc. without UI.
+//  Compiled ONLY when MSBuild property OpenClawEnableTestHooks=true
+//  (see OpenClaw.Tray.WinUI.csproj). Production binaries must not contain
+//  this type — enforced by
+//  OpenClaw.Tray.Tests.ReleaseBuildExcludesTestHooksTests.
 //
-//  Production binaries MUST NOT define OPENCLAW_E2E_HOOKS. The
-//  Release-build smoke test in OpenClaw.Tray.Tests
-//  (ReleaseBuildExcludesTestHooksTests) asserts this type is absent from
-//  the shipped assembly.
+//  These tools are exposed over the local MCP HTTP server only. They are
+//  NOT registered on the gateway WindowsNodeClient (see
+//  NodeService.RegisterTestHookCapability), so a misbehaving gateway can
+//  never trigger them.
 //
-//  The tools themselves are placeholders right now (workstream W3
-//  scaffolding); subsequent commits in W4 add the real implementations.
+//  Tool surface (W3.2 — diagnostics.dump implemented, rest declared with
+//  NotImplementedYet so the harness can probe the surface). Later commits
+//  add the real implementations.
 // ============================================================================
 
+using System;
+using System.Collections.Generic;
+using System.Text.Json;
 using System.Threading.Tasks;
+using OpenClaw.Shared;
 
 namespace OpenClawTray.Services.TestHooks;
 
-/// <summary>
-/// Placeholder for the W3.x test-hook capability. Real implementation lands
-/// in a follow-up commit that wires Mcp tool registrations via McpToolBridge.
-/// </summary>
-internal sealed class TestHookCapability
+internal sealed class TestHookCapability : NodeCapabilityBase
 {
-    public const string TestHookEnabledEnvironmentVariable = "OPENCLAW_TRAY_E2E";
+    /// <summary>
+    /// Belt-and-suspenders second gate. Compile-time gating (this whole file)
+    /// is the primary defence; this env var lets ops disable the hooks in an
+    /// E2E build at runtime without rebuilding. Defaults to enabled when the
+    /// type exists (you have to have asked for it at compile time anyway).
+    /// </summary>
+    public const string RuntimeEnabledEnvironmentVariable = "OPENCLAW_TRAY_E2E";
 
-    public static bool IsEnabledAtRuntime() =>
-        System.Environment.GetEnvironmentVariable(TestHookEnabledEnvironmentVariable) == "1";
+    public override string Category => "tray.testhook";
 
-    public Task<string> PingAsync() => Task.FromResult("test-hooks-available");
+    public override IReadOnlyList<string> Commands { get; } = new[]
+    {
+        // Diagnostic — implemented in this commit.
+        "tray.testhook.diagnostics.dump",
+        // Gateway config — implemented in a follow-up; writes a JSON5 patch
+        // into the WSL distro and runs `openclaw config validate`.
+        "tray.testhook.gateway.config.patch",
+        // Local setup orchestration — wraps LocalGatewaySetupEngine.
+        "tray.testhook.localSetup.start",
+        "tray.testhook.localSetup.status",
+        "tray.testhook.localSetup.cancel",
+        // Connection lifecycle.
+        "tray.testhook.connection.waitFor",
+        "tray.testhook.pairing.reset",
+        // Chat round-trip.
+        "tray.testhook.chat.send",
+    };
+
+    private readonly Func<TestHookDiagnostics> _diagnosticsProvider;
+    private readonly DateTimeOffset _startedAtUtc = DateTimeOffset.UtcNow;
+
+    public TestHookCapability(IOpenClawLogger logger, Func<TestHookDiagnostics> diagnosticsProvider)
+        : base(logger)
+    {
+        _diagnosticsProvider = diagnosticsProvider ?? throw new ArgumentNullException(nameof(diagnosticsProvider));
+    }
+
+    public static bool IsRuntimeEnabled() =>
+        Environment.GetEnvironmentVariable(RuntimeEnabledEnvironmentVariable) == "1";
+
+    public override Task<NodeInvokeResponse> ExecuteAsync(NodeInvokeRequest request)
+    {
+        if (!IsRuntimeEnabled())
+        {
+            return Task.FromResult(Error(
+                "tray.testhook.* tools are gated by OPENCLAW_TRAY_E2E=1 at runtime"));
+        }
+
+        NodeInvokeResponse response = request.Command switch
+        {
+            "tray.testhook.diagnostics.dump" => Success(BuildDiagnosticsPayload()),
+
+            "tray.testhook.gateway.config.patch" or
+            "tray.testhook.localSetup.start" or
+            "tray.testhook.localSetup.status" or
+            "tray.testhook.localSetup.cancel" or
+            "tray.testhook.connection.waitFor" or
+            "tray.testhook.pairing.reset" or
+            "tray.testhook.chat.send"
+                => Error($"{request.Command} is declared but not yet implemented (W3.2 follow-up)"),
+
+            _ => Error($"Unknown command: {request.Command}"),
+        };
+
+        return Task.FromResult(response);
+    }
+
+    private object BuildDiagnosticsPayload()
+    {
+        TestHookDiagnostics snapshot;
+        try
+        {
+            snapshot = _diagnosticsProvider();
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"TestHookCapability diagnosticsProvider threw: {ex.Message}");
+            snapshot = TestHookDiagnostics.Unavailable(ex.Message);
+        }
+
+        return new
+        {
+            schemaVersion = 1,
+            capturedAtUtc = DateTimeOffset.UtcNow.ToString("O"),
+            trayUptimeSeconds = (DateTimeOffset.UtcNow - _startedAtUtc).TotalSeconds,
+            processId = Environment.ProcessId,
+            machineName = Environment.MachineName,
+            gatewayLkgVersion = GatewayLkg.Version,
+            gatewayVersionOverride = Environment.GetEnvironmentVariable(GatewayLkg.VersionOverrideEnvironmentVariable),
+            connection = snapshot.Connection,
+            node = snapshot.Node,
+            pairing = snapshot.Pairing,
+            settingsSnapshot = snapshot.SettingsSnapshot,
+            errors = snapshot.Errors,
+        };
+    }
+}
+
+/// <summary>
+/// Pure-data snapshot the host supplies to <see cref="TestHookCapability"/>
+/// each time <c>tray.testhook.diagnostics.dump</c> is called. Keeping this
+/// a record-of-data (no live objects) makes the capability deterministically
+/// unit-testable in isolation.
+/// </summary>
+internal sealed record TestHookDiagnostics(
+    object? Connection,
+    object? Node,
+    object? Pairing,
+    object? SettingsSnapshot,
+    IReadOnlyList<string> Errors)
+{
+    public static TestHookDiagnostics Empty() =>
+        new(null, null, null, null, Array.Empty<string>());
+
+    public static TestHookDiagnostics Unavailable(string reason) =>
+        new(null, null, null, null, new[] { "diagnosticsProvider failed: " + reason });
 }
 
 #endif
