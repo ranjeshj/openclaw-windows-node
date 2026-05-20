@@ -52,7 +52,17 @@ public sealed class GatewayCollectionFixture : IAsyncLifetime
             Client, LocalSetupTimeout).ConfigureAwait(false);
     }
 
-    public Task DisposeAsync() => _tray.DisposeAsync();
+    public async Task DisposeAsync()
+    {
+        try
+        {
+            // Free port 18789 so the NEXT fixture's localSetup install
+            // doesn't fail with local_gateway_port_in_use. Best-effort.
+            await GatewayCompatScenarios.TerminateDistroAsync().ConfigureAwait(false);
+        }
+        catch { /* swallow */ }
+        await _tray.DisposeAsync().ConfigureAwait(false);
+    }
 }
 
 /// <summary>
@@ -85,5 +95,13 @@ public sealed class ReconnectFixture : IAsyncLifetime
             Client, TimeSpan.FromMinutes(20)).ConfigureAwait(false);
     }
 
-    public Task DisposeAsync() => _tray.DisposeAsync();
+    public async Task DisposeAsync()
+    {
+        try
+        {
+            await GatewayCompatScenarios.TerminateDistroAsync().ConfigureAwait(false);
+        }
+        catch { /* swallow */ }
+        await _tray.DisposeAsync().ConfigureAwait(false);
+    }
 }
