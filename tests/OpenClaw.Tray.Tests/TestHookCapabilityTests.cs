@@ -122,21 +122,25 @@ public class TestHookCapabilityTests : IDisposable
         Assert.True(doc.RootElement.GetProperty("validateOk").GetBoolean());
 
         Assert.Equal(3, fake.Calls.Count);
-        Assert.Equal("MyDistro", fake.Calls[0].Distro);
-        Assert.Equal(new[] { "-u", "openclaw", "--", "bash", "-lc" }, fake.Calls[0].Args[..5]);
-        Assert.Contains("base64 -d", fake.Calls[0].Args[5]);
-        Assert.Contains("/home/openclaw/openclaw.patch.json5", fake.Calls[0].Args[5]);
+        // Call 0: write the patch file via bash + base64.
+        // Match the production "explicit -u" pattern (LocalGatewaySetup.cs:993):
+        //   wsl -d <distro> -u <user> -- bash -lc <script>
+        Assert.Equal(new[] { "-d", "MyDistro", "-u", "openclaw", "--", "bash", "-lc" }, fake.Calls[0].Args[..7]);
+        Assert.Contains("base64 -d", fake.Calls[0].Args[7]);
+        Assert.Contains("/home/openclaw/openclaw.patch.json5", fake.Calls[0].Args[7]);
         var base64Match = System.Text.RegularExpressions.Regex.Match(
-            fake.Calls[0].Args[5], @"echo '([^']+)' \| base64");
+            fake.Calls[0].Args[7], @"echo '([^']+)' \| base64");
         Assert.True(base64Match.Success);
         var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(base64Match.Groups[1].Value));
         Assert.Equal(patch, decoded);
+        // Call 1: openclaw config patch --file <path>
         Assert.Equal(
-            new[] { "-u", "openclaw", "--", "/opt/openclaw/bin/openclaw",
+            new[] { "-d", "MyDistro", "-u", "openclaw", "--", "/opt/openclaw/bin/openclaw",
                     "config", "patch", "--file", "/home/openclaw/openclaw.patch.json5" },
             fake.Calls[1].Args);
+        // Call 2: openclaw config validate
         Assert.Equal(
-            new[] { "-u", "openclaw", "--", "/opt/openclaw/bin/openclaw", "config", "validate" },
+            new[] { "-d", "MyDistro", "-u", "openclaw", "--", "/opt/openclaw/bin/openclaw", "config", "validate" },
             fake.Calls[2].Args);
     }
 
@@ -211,14 +215,21 @@ public class TestHookCapabilityTests : IDisposable
         public int ValidateExitCode { get; set; }
         public string ValidateStderr { get; set; } = string.Empty;
 
-        public Task<WslCommandResult> RunInDistroAsync(
-            string name,
-            IReadOnlyList<string> command,
+        public Task<WslCommandResult> RunAsync(
+            IReadOnlyList<string> arguments,
             CancellationToken cancellationToken = default,
             IReadOnlyDictionary<string, string>? environment = null)
         {
-            var argsArray = command.ToArray();
-            Calls.Add((name, argsArray));
+            // The hook switched from RunInDistroAsync to RunAsync directly so
+            // the "-u <user>" arg sits before the "--" separator. Distro name
+            // is the value after "-d". Extract it for test convenience.
+            var argsArray = arguments.ToArray();
+            var distro = "";
+            for (var i = 0; i < argsArray.Length - 1; i++)
+            {
+                if (argsArray[i] == "-d") { distro = argsArray[i + 1]; break; }
+            }
+            Calls.Add((distro, argsArray));
             var joined = string.Join(" ", argsArray);
             if (joined.Contains("base64 -d"))
                 return Task.FromResult(new WslCommandResult(WriteExitCode, string.Empty, WriteStderr));
@@ -229,8 +240,18 @@ public class TestHookCapabilityTests : IDisposable
             return Task.FromResult(new WslCommandResult(0, string.Empty, string.Empty));
         }
 
-        public Task<WslCommandResult> RunAsync(IReadOnlyList<string> arguments, CancellationToken cancellationToken = default, IReadOnlyDictionary<string, string>? environment = null)
-            => Task.FromResult(new WslCommandResult(0, string.Empty, string.Empty));
+        public Task<WslCommandResult> RunInDistroAsync(
+            string name,
+            IReadOnlyList<string> command,
+            CancellationToken cancellationToken = default,
+            IReadOnlyDictionary<string, string>? environment = null)
+        {
+            // Not used by the hook anymore, but kept for interface compliance.
+            // If a future hook delegates here, recording would still work.
+            Calls.Add((name, command.ToArray()));
+            return Task.FromResult(new WslCommandResult(0, string.Empty, string.Empty));
+        }
+
         public Task<IReadOnlyList<WslDistroInfo>> ListDistrosAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<WslDistroInfo>>(Array.Empty<WslDistroInfo>());
         public Task<WslCommandResult> TerminateDistroAsync(string name, CancellationToken cancellationToken = default)

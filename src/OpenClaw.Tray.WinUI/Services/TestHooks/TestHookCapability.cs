@@ -128,18 +128,26 @@ internal sealed class TestHookCapability : NodeCapabilityBase
 
         var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(patchJson));
         var writeScript = $"echo {ShellEscape(base64)} | base64 -d > {ShellEscape(patchPath)}";
-        var writeResult = await _wslRunner.RunInDistroAsync(distroName,
-            new[] { "-u", wslUser, "--", "bash", "-lc", writeScript }, cts.Token).ConfigureAwait(false);
+        // Use RunAsync (not RunInDistroAsync) so we can include "-u <user>"
+        // alongside "-d <distro>". RunInDistroAsync prepends "-d name --"
+        // automatically, which when combined with the "-u" after it leads
+        // to a double "--" that ends wsl arg parsing prematurely (caught by
+        // the first PR-triggered run: "bash: - : invalid option").
+        // This matches the production pattern at
+        // LocalGatewaySetup.cs:993 ("bash -lc $script" with explicit -u openclaw).
+        var writeResult = await _wslRunner.RunAsync(
+            new[] { "-d", distroName, "-u", wslUser, "--", "bash", "-lc", writeScript },
+            cts.Token).ConfigureAwait(false);
 
         WslCommandResult? patchResult = null, validateResult = null;
         if (writeResult.Success)
         {
-            patchResult = await _wslRunner.RunInDistroAsync(distroName,
-                new[] { "-u", wslUser, "--", openclawBin, "config", "patch", "--file", patchPath },
+            patchResult = await _wslRunner.RunAsync(
+                new[] { "-d", distroName, "-u", wslUser, "--", openclawBin, "config", "patch", "--file", patchPath },
                 cts.Token).ConfigureAwait(false);
             if (patchResult.Success)
-                validateResult = await _wslRunner.RunInDistroAsync(distroName,
-                    new[] { "-u", wslUser, "--", openclawBin, "config", "validate" },
+                validateResult = await _wslRunner.RunAsync(
+                    new[] { "-d", distroName, "-u", wslUser, "--", openclawBin, "config", "validate" },
                     cts.Token).ConfigureAwait(false);
         }
 
