@@ -100,7 +100,10 @@ jobs:
         # OpenClaw.Tray.Tests.ReleaseBuildExcludesTestHooksTests). This is a
         # dedicated E2E build that lives in its own bin subtree and is used
         # ONLY by this job.
-        run: dotnet build src/OpenClaw.Tray.WinUI -c Debug -r win-x64 -p:OpenClawEnableTestHooks=true --no-restore
+        # Omit --no-restore so the RID-targeted restore generates the right
+        # win-x64 assets for the dependent WinUI projects (matches existing
+        # ci.yml pattern for "Build Tray App (WinUI)").
+        run: dotnet build src/OpenClaw.Tray.WinUI -c Debug -r win-x64 -p:OpenClawEnableTestHooks=true
 
       - name: Build gateway-compat harness
         run: dotnet build tests/OpenClaw.GatewayCompat.E2ETests -c Debug --no-restore
@@ -185,7 +188,8 @@ jobs:
         run: dotnet restore
 
       - name: Build E2E tray (with test hooks)
-        run: dotnet build src/OpenClaw.Tray.WinUI -c Debug -r win-x64 -p:OpenClawEnableTestHooks=true --no-restore
+        # Omit --no-restore to trigger RID-targeted restore for WinUI deps.
+        run: dotnet build src/OpenClaw.Tray.WinUI -c Debug -r win-x64 -p:OpenClawEnableTestHooks=true
 
       - name: Build gateway-compat harness
         run: dotnet build tests/OpenClaw.GatewayCompat.E2ETests -c Debug --no-restore
