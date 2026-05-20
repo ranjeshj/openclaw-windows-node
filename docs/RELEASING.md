@@ -61,3 +61,29 @@ git tag -a vX.Y.Z -m "Release vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
+## Gateway version (LKG) pinning
+
+The default `openclaw` gateway version the tray installs during local setup
+is pinned at the repo root in [`gateway-lkg.json`](../gateway-lkg.json) and
+mirrored as compile-time constants in
+[`src/OpenClaw.Shared/GatewayLkg.cs`](../src/OpenClaw.Shared/GatewayLkg.cs).
+A unit test (`GatewayLkgTests`) fails the build on drift between the two,
+so the pair always ships in lockstep.
+
+- **Bumping the pin** is automated by `.github/workflows/gateway-lkg-bump.yml`
+  (scheduled poll of the npm `openclaw` package). The workflow runs the full
+  `gateway-compat` suite against the candidate version and, only on green,
+  opens a PR updating both files. **PRs are never auto-merged** — a human
+  CODEOWNER must review the candidate (changelog link, tarball shasum, and
+  npm publish time are included in the PR body).
+- **Runtime override** (no rebuild required): set
+  `OPENCLAW_GATEWAY_VERSION` (e.g. `latest` or `2026.5.18`) before launching
+  the tray. Useful for the CI compat matrix and for hands-on validation; the
+  shipped installer always uses the pinned LKG by default.
+- **Refusing prereleases**: the auto-bump workflow ignores `-alpha`, `-beta`,
+  `-rc` dist-tags. Bump them manually if you want them tested.
+
+See `docs/GATEWAY_COMPAT_TESTING.md` for the surrounding compatibility CI
+architecture.
+
+
