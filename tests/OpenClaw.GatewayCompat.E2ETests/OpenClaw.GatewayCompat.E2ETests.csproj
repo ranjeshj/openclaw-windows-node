@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Gateway compatibility E2E tests. net10.0 (no Windows TFM) — the tests
+      spawn the tray exe out-of-process so the test host stays portable.
+      The spawned tray IS built with -p:OpenClawEnableTestHooks=true; the
+      harness locates that artifact at runtime.
+
+      Test taxonomy (xUnit traits):
+        Tier=Smoke    - runs anywhere; no WSL/gateway needed.
+        Tier=Gateway  - needs WSL + openclaw + fake LLM; gated by
+                        OPENCLAW_RUN_GATEWAY_COMPAT=1 so CI is the only
+                        place these run by default.
+
+      Run all:       dotnet test
+      Smoke only:    dotnet test (filter Tier equals Smoke)
+      Gateway lane:  set OPENCLAW_RUN_GATEWAY_COMPAT=1, then dotnet test (filter Tier equals Gateway)
+    -->
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\OpenClaw.Shared\OpenClaw.Shared.csproj" />
+    <!-- Link McpClient from IntegrationTests instead of duplicating it. The
+         JSON-RPC wire shape is shared, so we keep one source of truth. -->
+    <Compile Include="..\OpenClaw.Tray.IntegrationTests\McpClient.cs" Link="Reused\McpClient.cs" />
+  </ItemGroup>
+
+</Project>
