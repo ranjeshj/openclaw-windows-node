@@ -17,10 +17,12 @@ internal static class GatewayCompatScenarios
 
     /// <summary>
     /// Verified against openclaw 2026.5.18 by the W0 spike, then refined
-    /// via the first PR-triggered gateway-compat run (run 26142580405)
-    /// which surfaced the actual schema requirement:
-    /// <c>models.providers.&lt;id&gt;.models[].name</c> (NOT .id) is the
-    /// required property per <c>openclaw config validate</c>.
+    /// via PR-triggered runs (26142893903 and predecessors) which surfaced
+    /// the real required shape per <c>openclaw config validate</c>:
+    /// models.providers.&lt;id&gt;.models[] requires BOTH id and name plus
+    /// reasoning/input/cost/contextWindow/maxTokens. The full shape comes
+    /// from openclaw's own internal test fixture
+    /// (src/config/model-alias-defaults.test.ts in the gateway repo).
     /// </summary>
     public static string FakeLlmProviderPatch(string fakeLlmPort) => $$"""
         {
@@ -30,8 +32,18 @@ internal static class GatewayCompatScenarios
                 api: "openai-completions",
                 baseUrl: "http://127.0.0.1:{{fakeLlmPort}}/v1",
                 apiKey: "test",
-                authMode: "api-key",
-                models: [ { name: "fake-llm" } ]
+                auth: "api-key",
+                models: [
+                  {
+                    id: "fake-llm",
+                    name: "fake-llm",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 200000,
+                    maxTokens: 4096
+                  }
+                ]
               }
             }
           },

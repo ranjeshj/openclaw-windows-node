@@ -39,9 +39,17 @@ with this JSON5 patch:
         api: "openai-completions",
         baseUrl: "http://127.0.0.1:18888/v1",
         apiKey: "test",
-        authMode: "api-key",
+        auth: "api-key",
         models: [
-          { name: "fake-llm" }
+          {
+            id: "fake-llm",
+            name: "fake-llm",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 200000,
+            maxTokens: 4096
+          }
         ]
       }
     }
@@ -53,6 +61,10 @@ with this JSON5 patch:
   }
 }
 ```
+
+The full shape comes from openclaw's own internal test fixture
+(`src/config/model-alias-defaults.test.ts`); shorter shapes are
+rejected by `openclaw config validate`.
 
 …then validate:
 
