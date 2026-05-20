@@ -1,0 +1,193 @@
+name: Gateway Compat Spike (W0)
+
+# Throwaway diagnostic workflow that proves the WSL + openclaw + fake-LLM
+# pipeline works on a hosted Windows runner before we invest in a full
+# gateway-compat harness. Manual dispatch only. Outputs cold-start timings,
+# `openclaw config validate` results, and a fake-LLM round-trip so we can
+# size the real CI plan. Delete this file (or fold into gateway-compat.yml)
+# once the findings are baked into the harness.
+
+on:
+  workflow_dispatch:
+    inputs:
+      gateway_version:
+        description: openclaw npm version or dist-tag to install
+        required: false
+        default: latest
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    name: WSL + openclaw + fake LLM
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      OPENCLAW_GATEWAY_VERSION: ${{ inputs.gateway_version }}
+      FAKE_LLM_PORT: "18888"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+
+      - name: WSL host diagnostics
+        shell: pwsh
+        run: |
+          $sw = [System.Diagnostics.Stopwatch]::StartNew()
+          Write-Host "::group::wsl --version"
+          wsl --version
+          Write-Host "::endgroup::"
+          Write-Host "::group::wsl --status"
+          wsl --status
+          Write-Host "::endgroup::"
+          Write-Host "::group::wsl --list --verbose"
+          wsl --list --verbose
+          Write-Host "::endgroup::"
+          Write-Host "::group::wsl --list --online (first 20 lines)"
+          wsl --list --online | Select-Object -First 20
+          Write-Host "::endgroup::"
+          $sw.Stop()
+          "wsl_diagnostics_seconds=$([math]::Round($sw.Elapsed.TotalSeconds,1))" | Out-File -Append $env:GITHUB_OUTPUT
+        id: diag
+
+      - name: Install Ubuntu-24.04 distro
+        shell: pwsh
+        run: |
+          $sw = [System.Diagnostics.Stopwatch]::StartNew()
+          # Match the production install command used by LocalGatewaySetup:
+          #   wsl --install Ubuntu-24.04 --name OpenClawGateway --no-launch --version 2
+          # Use default name 'Ubuntu-24.04' for the spike to avoid the rename codepath.
+          wsl --install Ubuntu-24.04 --no-launch --version 2
+          if ($LASTEXITCODE -ne 0) { throw "wsl --install failed with $LASTEXITCODE" }
+          $sw.Stop()
+          Write-Host "Distro install: $($sw.Elapsed.TotalSeconds)s"
+          wsl --list --verbose
+
+      - name: Provision openclaw user inside distro
+        shell: pwsh
+        run: |
+          # Production LocalGatewaySetup creates an 'openclaw' user; mirror that here.
+          $script = @"
+          set -euo pipefail
+          if ! id -u openclaw >/dev/null 2>&1; then
+            useradd -m -s /bin/bash openclaw
+            usermod -aG sudo openclaw
+            echo 'openclaw ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/openclaw
+            chmod 440 /etc/sudoers.d/openclaw
+          fi
+          mkdir -p /opt/openclaw
+          chown openclaw:openclaw /opt/openclaw
+          "@
+          $script | wsl -d Ubuntu-24.04 -u root -- bash -lc 'cat | bash -s'
+          if ($LASTEXITCODE -ne 0) { throw "openclaw user provision failed with $LASTEXITCODE" }
+
+      - name: Install openclaw gateway (mirrors LocalGatewaySetup)
+        shell: pwsh
+        run: |
+          $sw = [System.Diagnostics.Stopwatch]::StartNew()
+          $version = $env:OPENCLAW_GATEWAY_VERSION
+          if (-not $version) { $version = "latest" }
+          Write-Host "Installing openclaw@$version via install-cli.sh"
+          # Same command shape as OpenClawInstallCliLinuxInstaller.InstallAsync.
+          $cmd = "curl -fsSL --proto '=https' --tlsv1.2 'https://openclaw.ai/install-cli.sh' | " +
+                 "OPENCLAW_PREFIX='/opt/openclaw' OPENCLAW_INSTALL_METHOD='npm' OPENCLAW_VERSION='$version' " +
+                 "SHARP_IGNORE_GLOBAL_LIBVIPS=1 bash -s -- --json --prefix '/opt/openclaw' --version '$version' --no-onboard"
+          wsl -d Ubuntu-24.04 -u openclaw -- bash -lc $cmd
+          if ($LASTEXITCODE -ne 0) { throw "openclaw install failed with $LASTEXITCODE" }
+          $sw.Stop()
+          Write-Host "Gateway install: $($sw.Elapsed.TotalSeconds)s"
+
+      - name: Verify openclaw CLI
+        shell: pwsh
+        run: |
+          wsl -d Ubuntu-24.04 -u openclaw -- /opt/openclaw/bin/openclaw --version
+          if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with $LASTEXITCODE" }
+          wsl -d Ubuntu-24.04 -u openclaw -- /opt/openclaw/bin/openclaw --help | Select-Object -First 40
+
+      - name: Start fake LLM server inside WSL
+        shell: pwsh
+        run: |
+          # Copy server.mjs into the distro and launch via nohup so it survives this step.
+          $repo = ($env:GITHUB_WORKSPACE -replace '\\','/').TrimEnd('/')
+          $wslRepo = "/mnt/" + ($repo.Substring(0,1).ToLower()) + $repo.Substring(2)
+          Write-Host "WSL repo path: $wslRepo"
+          $launch = @"
+          set -euo pipefail
+          mkdir -p /home/openclaw/fake-llm
+          cp '$wslRepo/tools/fake-llm-server/server.mjs' /home/openclaw/fake-llm/server.mjs
+          # Node ships in Ubuntu-24.04's universe repo as `nodejs`; install if missing.
+          if ! command -v node >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nodejs
+          fi
+          node --version
+          nohup env FAKE_LLM_PORT=$env:FAKE_LLM_PORT FAKE_LLM_BIND=127.0.0.1 \
+            node /home/openclaw/fake-llm/server.mjs \
+            > /home/openclaw/fake-llm/server.log 2>&1 &
+          sleep 2
+          curl -fsS http://127.0.0.1:$env:FAKE_LLM_PORT/ && echo
+          curl -fsS -X POST -H 'content-type: application/json' \
+            -d '{"model":"fake-llm","messages":[{"role":"user","content":"spike ping"}]}' \
+            http://127.0.0.1:$env:FAKE_LLM_PORT/v1/chat/completions
+          "@
+          wsl -d Ubuntu-24.04 -u openclaw -- bash -lc $launch
+          if ($LASTEXITCODE -ne 0) { throw "fake-llm bring-up failed with $LASTEXITCODE" }
+
+      - name: Configure openclaw to use fake LLM and validate
+        shell: pwsh
+        run: |
+          # Try the openclaw config set / validate path. Capture exit codes per call so
+          # we can see exactly which key shape the CLI accepts. This is the
+          # authoritative "what does the config schema look like today" probe.
+          $script = @"
+          set +e
+          OC=/opt/openclaw/bin/openclaw
+          echo '--- agents.providers.fake.api ---'
+          \$OC config set agents.providers.fake.api openai-completions; echo exit=\$?
+          echo '--- agents.providers.fake.baseUrl ---'
+          \$OC config set agents.providers.fake.baseUrl http://127.0.0.1:$env:FAKE_LLM_PORT/v1; echo exit=\$?
+          echo '--- agents.providers.fake.apiKey ---'
+          \$OC config set agents.providers.fake.apiKey test; echo exit=\$?
+          echo '--- agents.providers.fake.models.0.id ---'
+          \$OC config set agents.providers.fake.models.0.id fake-llm; echo exit=\$?
+          echo '--- agents.defaults.model.primary ---'
+          \$OC config set agents.defaults.model.primary fake/fake-llm; echo exit=\$?
+          echo '--- openclaw config validate ---'
+          \$OC config validate; echo validate_exit=\$?
+          echo '--- openclaw config get (sanitized snapshot) ---'
+          \$OC config get | sed 's/\(apiKey[^,]*\):"[^"]*"/\1:"<redacted>"/g'
+          "@
+          wsl -d Ubuntu-24.04 -u openclaw -- bash -lc $script | Tee-Object -FilePath openclaw-config-spike.log
+          # We do NOT fail the job here even if validate exits non-zero; the whole point
+          # of the spike is to record the actual config shape so we can correct the
+          # production harness before W3 work begins.
+
+      - name: Collect server log
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "::group::fake-llm server.log"
+          wsl -d Ubuntu-24.04 -u openclaw -- cat /home/openclaw/fake-llm/server.log
+          Write-Host "::endgroup::"
+
+      - name: Upload spike artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gateway-compat-spike
+          path: |
+            openclaw-config-spike.log
+          if-no-files-found: warn
+
+      - name: Cleanup distro
+        if: always()
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          wsl --shutdown
+          wsl --unregister Ubuntu-24.04

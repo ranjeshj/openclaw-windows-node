@@ -42,6 +42,33 @@
          CI passes majorMinorPatch (e.g. 0.3.1) and patches Package.appxmanifest before build. -->
   </PropertyGroup>
 
+  <!--
+    Gateway-compat E2E test hooks.
+
+    The tray exposes a `tray.testhook.*` MCP tool surface (under
+    Services/TestHooks/) that lets the gateway-compat harness drive
+    local-setup, gateway config, pairing reset, etc. without touching the
+    UI. These tools are POWERFUL and must NEVER ship in production
+    binaries — the rubber-duck critique flagged that env-var gating
+    inside a shipped binary is not enough (a local process with the MCP
+    bearer token could enable them).
+
+    Gating is therefore at compile time: source files under
+    Services/TestHooks/ are wrapped in `#if OPENCLAW_E2E_HOOKS`. The
+    constant is defined only when this build sets `OpenClawEnableTestHooks=true`.
+
+    Production CI must NEVER set this. The hook artifacts are built by
+    a dedicated `e2e-hooks` lane in gateway-compat.yml and used only by
+    the harness.
+
+    A Release-build smoke test in OpenClaw.Tray.Tests asserts that
+    `OpenClawTray.Services.TestHooks.TestHookCapability` is absent from
+    the shipped assembly.
+  -->
+  <PropertyGroup Condition="'$(OpenClawEnableTestHooks)' == 'true'">
+    <DefineConstants>$(DefineConstants);OPENCLAW_E2E_HOOKS</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\OpenClaw.Shared\OpenClaw.Shared.csproj" />
     <ProjectReference Include="..\OpenClaw.Connection\OpenClaw.Connection.csproj" />
