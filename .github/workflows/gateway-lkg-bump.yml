@@ -1,0 +1,206 @@
+name: Gateway LKG Bump
+
+# Polls the `openclaw` npm package for a newer release than what's pinned
+# in gateway-lkg.json. When a newer release exists, runs the full
+# gateway-compat suite against the candidate. If green, opens (or updates)
+# a PR that bumps both gateway-lkg.json AND src/OpenClaw.Shared/GatewayLkg.cs
+# in lockstep so OpenClaw.Shared.Tests.GatewayLkgTests stays green.
+#
+# Hard rules (rubber-duck critique findings):
+#   - NEVER auto-merges. CODEOWNER review is required.
+#   - PR body records package version, tarball shasum, npm publish time,
+#     and a link to the green compat run.
+#   - Pre-releases (alpha/beta/rc/insiders/dev) are ignored.
+#   - Privileged secrets are not exposed to the candidate test job.
+
+on:
+  schedule:
+    # Every 6 hours. Cron is UTC.
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      force_version:
+        description: Force a specific candidate version (overrides npm dist-tag check)
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gateway-lkg-bump
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    name: Find candidate version
+    runs-on: ubuntu-24.04
+    outputs:
+      should_run: ${{ steps.compare.outputs.should_run }}
+      current: ${{ steps.compare.outputs.current }}
+      candidate: ${{ steps.compare.outputs.candidate }}
+      shasum: ${{ steps.compare.outputs.shasum }}
+      published_at: ${{ steps.compare.outputs.published_at }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compare current LKG vs npm latest
+        id: compare
+        shell: bash
+        env:
+          FORCE_VERSION: ${{ inputs.force_version }}
+        run: |
+          set -euo pipefail
+          current="$(jq -r .version gateway-lkg.json)"
+          if [ -n "${FORCE_VERSION:-}" ]; then
+            candidate="$FORCE_VERSION"
+          else
+            candidate="$(curl -fsSL https://registry.npmjs.org/openclaw | jq -r '."dist-tags".latest')"
+          fi
+          echo "Current LKG: $current"
+          echo "Candidate:   $candidate"
+
+          # Refuse pre-releases unless explicitly forced.
+          if [ -z "${FORCE_VERSION:-}" ] && echo "$candidate" | grep -Eqi '(alpha|beta|rc|insiders|dev|next|preview)'; then
+            echo "Candidate '$candidate' is a pre-release; skipping (set force_version to override)."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$current" = "$candidate" ]; then
+            echo "Already on latest. Nothing to do."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Capture shasum + publish time so the bump PR has provenance.
+          meta="$(curl -fsSL "https://registry.npmjs.org/openclaw/$candidate")"
+          shasum="$(echo "$meta" | jq -r .dist.shasum)"
+          published_at="$(curl -fsSL https://registry.npmjs.org/openclaw | jq -r ".time[\"$candidate\"]")"
+
+          {
+            echo "should_run=true"
+            echo "current=$current"
+            echo "candidate=$candidate"
+            echo "shasum=$shasum"
+            echo "published_at=$published_at"
+          } >> "$GITHUB_OUTPUT"
+
+  validate:
+    name: Validate openclaw@${{ needs.discover.outputs.candidate }}
+    needs: discover
+    if: needs.discover.outputs.should_run == 'true'
+    uses: ./.github/workflows/gateway-compat.yml
+    # Calling the gateway-compat workflow as a reusable workflow. This
+    # requires gateway-compat.yml to support workflow_call; if it does not
+    # yet, the bump workflow will be inert until that's added — a deliberate
+    # safety property: no PR opens without a green compat run.
+    # The actual test version selection happens inside that workflow via
+    # the workflow_dispatch input plumbing.
+    with:
+      gateway_version: ${{ needs.discover.outputs.candidate }}
+      run_gateway_tier: true
+
+  open_pr:
+    name: Open or update LKG bump PR
+    needs: [ discover, validate ]
+    if: needs.discover.outputs.should_run == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Need full history so the PR branch can rebase cleanly.
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump gateway-lkg.json + GatewayLkg.cs in lockstep
+        id: bump
+        shell: bash
+        env:
+          CURRENT: ${{ needs.discover.outputs.current }}
+          CANDIDATE: ${{ needs.discover.outputs.candidate }}
+          SHASUM: ${{ needs.discover.outputs.shasum }}
+          PUBLISHED_AT: ${{ needs.discover.outputs.published_at }}
+          GITHUB_SHA_SHORT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          today="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          short_sha="${GITHUB_SHA_SHORT:0:7}"
+
+          # Update gateway-lkg.json
+          tmp="$(mktemp)"
+          jq --arg v "$CANDIDATE" --arg at "$today" --arg ref "$short_sha" \
+            '.version=$v | .verifiedAt=$at | .verifiedTrayRef=$ref' \
+            gateway-lkg.json > "$tmp"
+          mv "$tmp" gateway-lkg.json
+
+          # Update GatewayLkg.cs (constants kept in lockstep per
+          # OpenClaw.Shared.Tests.GatewayLkgTests).
+          sed -i \
+            -e "s/public const string Version = \"[^\"]*\";/public const string Version = \"$CANDIDATE\";/" \
+            -e "s/public const string VerifiedAt = \"[^\"]*\";/public const string VerifiedAt = \"$today\";/" \
+            -e "s/public const string VerifiedTrayRef = \"[^\"]*\";/public const string VerifiedTrayRef = \"$short_sha\";/" \
+            src/OpenClaw.Shared/GatewayLkg.cs
+
+          {
+            echo "PR_TITLE=chore(lkg): bump gateway LKG to $CANDIDATE"
+            echo "BRANCH=auto/lkg-bump/$CANDIDATE"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create or update PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT: ${{ needs.discover.outputs.current }}
+          CANDIDATE: ${{ needs.discover.outputs.candidate }}
+          SHASUM: ${{ needs.discover.outputs.shasum }}
+          PUBLISHED_AT: ${{ needs.discover.outputs.published_at }}
+          BRANCH: ${{ steps.bump.outputs.BRANCH }}
+          PR_TITLE: ${{ steps.bump.outputs.PR_TITLE }}
+        run: |
+          set -euo pipefail
+          git config user.name "openclaw-lkg-bot"
+          git config user.email "openclaw-lkg-bot@users.noreply.github.com"
+
+          git checkout -B "$BRANCH"
+          git add gateway-lkg.json src/OpenClaw.Shared/GatewayLkg.cs
+          git commit -m "$PR_TITLE
+
+          - npm version: $CANDIDATE
+          - tarball shasum: $SHASUM
+          - npm publish time: $PUBLISHED_AT
+          - compat suite: green vs $CANDIDATE (see linked workflow run)
+
+          Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
+          git push --force-with-lease origin "$BRANCH"
+
+          body="$(cat <<EOF
+          Automated bump of the Last-Known-Good openclaw gateway version.
+
+          | Field | Value |
+          |---|---|
+          | Previous LKG | $CURRENT |
+          | New LKG | $CANDIDATE |
+          | npm publish time | $PUBLISHED_AT |
+          | Tarball shasum (SHA-1) | $SHASUM |
+          | Validation workflow | https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }} |
+          | Changelog | https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md |
+
+          **Required before merge:**
+          - [ ] CODEOWNER has reviewed the openclaw changelog for behavior changes that affect the tray.
+          - [ ] Manual sanity: install the Windows tray from this branch and run through the onboarding wizard.
+
+          This PR will not auto-merge — a human must approve.
+          EOF
+          )"
+
+          # Use --fill-first to avoid an interactive prompt; if the PR
+          # already exists, gh pr edit updates it instead.
+          if gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" --title "$PR_TITLE" --body "$body"
+          else
+            gh pr create --title "$PR_TITLE" --body "$body" --base master --head "$BRANCH" --label "lkg-bump,gateway-compat"
+          fi
