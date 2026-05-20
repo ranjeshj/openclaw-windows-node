@@ -891,7 +891,14 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
             Element bubbleContent = SafeMarkdownText(entry.Text);
             if (nestedTool != null)
             {
-                bubbleContent = VStack(8, bubbleContent, nestedTool);
+                // Top gap (markdown bottom → tool card top) needs to be a
+                // little larger than the bubble's bottom padding so the
+                // optical spacing matches the gap from the tool card to the
+                // bubble's bottom edge — Markdown text has very tight
+                // line-height with no trailing descender, so a literal-equal
+                // gap reads as visibly tighter on top.
+                var nestedTopGap = (int)bubblePadding.Bottom + 4;
+                bubbleContent = VStack(nestedTopGap, bubbleContent, nestedTool);
             }
             var card = Border(
                 bubbleContent
