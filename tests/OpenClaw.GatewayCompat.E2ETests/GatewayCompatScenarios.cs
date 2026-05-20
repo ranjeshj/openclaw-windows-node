@@ -16,10 +16,11 @@ internal static class GatewayCompatScenarios
     public const string DistroName = "Ubuntu-24.04";
 
     /// <summary>
-    /// Verified against openclaw 2026.5.18 by the W0 spike. When a future
-    /// gateway version moves keys, the GatewayConfigPatchTests scenario fails
-    /// first and blocks the LKG-bump auto-PR. Update this in sync with
-    /// tools/fake-llm-server/README.md.
+    /// Verified against openclaw 2026.5.18 by the W0 spike, then refined
+    /// via the first PR-triggered gateway-compat run (run 26142580405)
+    /// which surfaced the actual schema requirement:
+    /// <c>models.providers.&lt;id&gt;.models[].name</c> (NOT .id) is the
+    /// required property per <c>openclaw config validate</c>.
     /// </summary>
     public static string FakeLlmProviderPatch(string fakeLlmPort) => $$"""
         {
@@ -30,7 +31,7 @@ internal static class GatewayCompatScenarios
                 baseUrl: "http://127.0.0.1:{{fakeLlmPort}}/v1",
                 apiKey: "test",
                 authMode: "api-key",
-                models: [ { id: "fake-llm" } ]
+                models: [ { name: "fake-llm" } ]
               }
             }
           },

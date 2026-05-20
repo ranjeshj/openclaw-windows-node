@@ -41,7 +41,7 @@ with this JSON5 patch:
         apiKey: "test",
         authMode: "api-key",
         models: [
-          { id: "fake-llm" }
+          { name: "fake-llm" }
         ]
       }
     }
@@ -70,7 +70,7 @@ openclaw config set models.providers.fake.api openai-completions
 openclaw config set models.providers.fake.baseUrl http://127.0.0.1:18888/v1
 openclaw config set models.providers.fake.apiKey test
 openclaw config set models.providers.fake.authMode api-key
-openclaw config set models.providers.fake.models '[{"id":"fake-llm"}]' --strict-json
+openclaw config set models.providers.fake.models '[{"name":"fake-llm"}]' --strict-json
 openclaw config set agents.defaults.model.primary fake/fake-llm
 openclaw config validate
 ```
