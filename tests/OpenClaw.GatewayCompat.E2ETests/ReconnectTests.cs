@@ -1,3 +1,4 @@
+using System;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Xunit;
@@ -15,25 +16,22 @@ namespace OpenClaw.GatewayCompat.E2ETests;
 /// path the tray runs when it boots fresh.
 /// </summary>
 [Trait("Tier", "Gateway")]
-public class ReconnectTests : IClassFixture<GatewayCompatFixture>
+public class ReconnectTests : IClassFixture<ReconnectFixture>
 {
-    private readonly GatewayCompatFixture _fixture;
+    private readonly ReconnectFixture _fixture;
 
-    public ReconnectTests(GatewayCompatFixture fixture) => _fixture = fixture;
+    public ReconnectTests(ReconnectFixture fixture) => _fixture = fixture;
 
     [GatewayCompatFact]
     public async Task PairingReset_FollowedByReSetup_ReachesReadyAgain()
     {
-        // Phase 1: first-time setup.
-        await GatewayCompatScenarios.ApplyFakeLlmProviderAsync(_fixture.Client);
-        using (var start = await _fixture.Client.CallToolAsync(
-            "tray.testhook.localSetup.start",
-            new { replaceExistingConfigurationConfirmed = true })) { }
-        using (var wait = await _fixture.Client.CallToolAsync(
-            "tray.testhook.connection.waitFor",
-            new { targetOverallState = "Ready", timeoutSeconds = 600 }))
+        // Phase 1: initial setup is already done by ReconnectFixture.
+        //          Just confirm the connection has settled at Ready.
+        using (var p = await GatewayCompatScenarios.WaitForConnectionAsync(
+            _fixture.Client,
+            new { targetOverallState = "Ready" },
+            TimeSpan.FromSeconds(120)))
         {
-            using var p = GatewayCompatScenarios.UnwrapToolPayload(wait);
             Assert.True(p.RootElement.GetProperty("reached").GetBoolean(),
                 "Phase 1 (initial setup) did not reach Ready: " +
                 JsonSerializer.Serialize(p.RootElement));
@@ -54,21 +52,19 @@ public class ReconnectTests : IClassFixture<GatewayCompatFixture>
         }
 
         // Phase 3: re-pair using the same setup flow (with replace=true
-        // because the legacy state may still be on disk).
-        using (var start = await _fixture.Client.CallToolAsync(
-            "tray.testhook.localSetup.start",
-            new { replaceExistingConfigurationConfirmed = true })) { }
-        using (var wait = await _fixture.Client.CallToolAsync(
-            "tray.testhook.connection.waitFor",
-            new { targetOverallState = "Ready", timeoutSeconds = 600 }))
+        // because the legacy state may still be on disk). Use the shared
+        // helper so the re-pair drives the same end state.
+        await GatewayCompatScenarios.DriveLocalSetupAndPrepareGatewayAsync(
+            _fixture.Client, TimeSpan.FromMinutes(20)).ConfigureAwait(false);
+
+        using (var p = await GatewayCompatScenarios.WaitForConnectionAsync(
+            _fixture.Client,
+            new { targetOverallState = "Ready" },
+            TimeSpan.FromSeconds(120)))
         {
-            using var p = GatewayCompatScenarios.UnwrapToolPayload(wait);
             Assert.True(p.RootElement.GetProperty("reached").GetBoolean(),
                 "Phase 3 (re-pair after reset) did not reach Ready: " +
                 JsonSerializer.Serialize(p.RootElement));
-            // The new pairing must issue a fresh device id (or at least a
-            // valid one — we don't assert uniqueness because gateway
-            // implementations vary; we only assert presence).
             Assert.NotNull(p.RootElement.GetProperty("operatorDeviceId").GetString());
         }
     }

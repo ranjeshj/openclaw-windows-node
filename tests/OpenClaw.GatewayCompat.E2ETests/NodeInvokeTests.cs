@@ -1,3 +1,4 @@
+using System;
 using System.Threading.Tasks;
 using Xunit;
 
@@ -14,22 +15,20 @@ namespace OpenClaw.GatewayCompat.E2ETests;
 /// system.notify silently dropped" would manifest as.
 /// </summary>
 [Trait("Tier", "Gateway")]
-public class NodeInvokeTests : IClassFixture<GatewayCompatFixture>
+[Collection("Gateway")]
+public class NodeInvokeTests
 {
-    private readonly GatewayCompatFixture _fixture;
+    private readonly GatewayCollectionFixture _fixture;
 
-    public NodeInvokeTests(GatewayCompatFixture fixture) => _fixture = fixture;
+    public NodeInvokeTests(GatewayCollectionFixture fixture) => _fixture = fixture;
 
     [GatewayCompatFact]
     public async Task GatewaySees_WindowsNode_WithSystemCapability()
     {
-        await GatewayCompatScenarios.ApplyFakeLlmProviderAsync(_fixture.Client);
-        using (var start = await _fixture.Client.CallToolAsync(
-            "tray.testhook.localSetup.start",
-            new { replaceExistingConfigurationConfirmed = true })) { }
-        using (var wait = await _fixture.Client.CallToolAsync(
-            "tray.testhook.connection.waitFor",
-            new { nodeConnected = true, paired = true, timeoutSeconds = 600 })) { }
+        using (var _ = await GatewayCompatScenarios.WaitForConnectionAsync(
+            _fixture.Client,
+            new { nodeConnected = true, paired = true },
+            TimeSpan.FromSeconds(120))) { }
 
         using var nodes = await _fixture.Client.CallToolAsync("app.nodes");
         using var nodesPayload = GatewayCompatScenarios.UnwrapToolPayload(nodes);

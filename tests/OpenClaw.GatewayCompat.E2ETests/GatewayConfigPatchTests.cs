@@ -7,57 +7,41 @@ namespace OpenClaw.GatewayCompat.E2ETests;
 
 /// <summary>
 /// Verifies that the harness can inject the fake-LLM provider into the
-/// openclaw gateway config via <c>tray.testhook.gateway.config.patch</c>,
+/// openclaw gateway config via <c>tray.testhook.gateway.config.patch</c>
 /// and that <c>openclaw config validate</c> accepts the resulting config.
 ///
-/// This is the foundation scenario every chat/node.invoke test depends on:
-/// if the gateway rejects the fake-provider config, nothing downstream
-/// works. Catches schema drift in the openclaw config root.
+/// Under Plan A the gateway is installed by <see cref="GatewayCollectionFixture"/>
+/// (production path), and the fixture has already applied the verified
+/// patch from <see cref="GatewayCompatScenarios.FakeLlmProviderPatch(string)"/>
+/// on startup. This test re-applies the canonical patch and asserts each
+/// phase succeeded — exercising patch idempotence AND catching schema
+/// drift against the actual installed gateway.
 /// </summary>
 [Trait("Tier", "Gateway")]
-public class GatewayConfigPatchTests : IClassFixture<GatewayCompatFixture>
+[Collection("Gateway")]
+public class GatewayConfigPatchTests
 {
-    private readonly GatewayCompatFixture _fixture;
+    private readonly GatewayCollectionFixture _fixture;
 
-    public GatewayConfigPatchTests(GatewayCompatFixture fixture) => _fixture = fixture;
+    public GatewayConfigPatchTests(GatewayCollectionFixture fixture) => _fixture = fixture;
 
     [GatewayCompatFact]
     public async Task FakeLlmProvider_PatchAndValidateSucceed()
     {
-        // The patch shape was verified against openclaw 2026.5.18 by the W0
-        // spike (see tools/fake-llm-server/README.md). If a future gateway
-        // version moves the keys, this assertion fails loudly and the
-        // gateway-lkg-bump auto-PR is blocked - which is the whole point.
-        var port = Environment.GetEnvironmentVariable("FAKE_LLM_PORT") ?? "18888";
-        var patch = $$"""
-        {
-          models: {
-            providers: {
-              fake: {
-                api: "openai-completions",
-                baseUrl: "http://127.0.0.1:{{port}}/v1",
-                apiKey: "test",
-                authMode: "api-key",
-                models: [ { id: "fake-llm" } ]
-              }
-            }
-          },
-          agents: {
-            defaults: { model: { primary: "fake/fake-llm" } }
-          }
-        }
-        """;
-
+        // Verified patch shape (against openclaw 2026.5.18). Strict JSON,
+        // both id and name on each model entry, full cost/window/maxTokens.
+        // If a future gateway version moves the keys, this assertion fails
+        // loudly and the gateway-lkg-bump auto-PR is blocked - which is the
+        // whole point.
         using var response = await _fixture.Client.CallToolAsync(
             "tray.testhook.gateway.config.patch",
             new
             {
-                distroName = "Ubuntu-24.04",
-                patchJson = patch,
+                distroName = GatewayCompatScenarios.DistroName,
+                patchJson = GatewayCompatScenarios.FakeLlmProviderPatch(
+                    GatewayCompatScenarios.FakeLlmPort),
             });
 
-        // The tool returns the NodeInvokeResponse payload as the MCP tool
-        // result text body; parse it and assert each phase succeeded.
         var text = response.RootElement
             .GetProperty("result")
             .GetProperty("content")[0]
@@ -75,8 +59,9 @@ public class GatewayConfigPatchTests : IClassFixture<GatewayCompatFixture>
             root.GetProperty("patchStderr").GetString());
         Assert.True(root.GetProperty("validateOk").GetBoolean(),
             "openclaw config validate failed - the patch shape is no longer " +
-            "accepted by this gateway version. Update tools/fake-llm-server/README.md " +
-            "after consulting `openclaw config schema`. Stderr: " +
+            "accepted by this gateway version. Update " +
+            "GatewayCompatScenarios.FakeLlmProviderPatch after consulting " +
+            "`openclaw config schema`. Stderr: " +
             root.GetProperty("validateStderr").GetString());
     }
 }

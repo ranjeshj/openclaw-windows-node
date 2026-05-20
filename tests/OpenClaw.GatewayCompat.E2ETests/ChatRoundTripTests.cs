@@ -17,22 +17,20 @@ namespace OpenClaw.GatewayCompat.E2ETests;
 /// catches every layer between the click handler and the wire.
 /// </summary>
 [Trait("Tier", "Gateway")]
-public class ChatRoundTripTests : IClassFixture<GatewayCompatFixture>
+[Collection("Gateway")]
+public class ChatRoundTripTests
 {
-    private readonly GatewayCompatFixture _fixture;
+    private readonly GatewayCollectionFixture _fixture;
 
-    public ChatRoundTripTests(GatewayCompatFixture fixture) => _fixture = fixture;
+    public ChatRoundTripTests(GatewayCollectionFixture fixture) => _fixture = fixture;
 
     [GatewayCompatFact]
     public async Task ChatSend_ReachesFakeLlm_WithExpectedMessage()
     {
-        await GatewayCompatScenarios.ApplyFakeLlmProviderAsync(_fixture.Client);
-        using (var start = await _fixture.Client.CallToolAsync(
-            "tray.testhook.localSetup.start",
-            new { replaceExistingConfigurationConfirmed = true })) { }
-        using (var wait = await _fixture.Client.CallToolAsync(
-            "tray.testhook.connection.waitFor",
-            new { targetOverallState = "Ready", timeoutSeconds = 600 })) { }
+        using (var _ = await GatewayCompatScenarios.WaitForConnectionAsync(
+            _fixture.Client,
+            new { targetOverallState = "Ready" },
+            TimeSpan.FromSeconds(120))) { }
 
         // Reset the fake-LLM's request log so we can assert exactly what it sees.
         var fakeLlmPort = GatewayCompatScenarios.FakeLlmPort;

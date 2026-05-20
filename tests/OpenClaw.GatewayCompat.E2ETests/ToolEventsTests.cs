@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -19,25 +20,23 @@ namespace OpenClaw.GatewayCompat.E2ETests;
 /// connect, exactly as in the user-facing path.
 /// </summary>
 [Trait("Tier", "Gateway")]
-public class ToolEventsTests : IClassFixture<GatewayCompatFixture>
+[Collection("Gateway")]
+public class ToolEventsTests
 {
-    private readonly GatewayCompatFixture _fixture;
+    private readonly GatewayCollectionFixture _fixture;
 
-    public ToolEventsTests(GatewayCompatFixture fixture) => _fixture = fixture;
+    public ToolEventsTests(GatewayCollectionFixture fixture) => _fixture = fixture;
 
     [GatewayCompatFact]
     public async Task GatewayBroadcasts_ToolStreamEvents_AfterChatSend()
     {
-        await GatewayCompatScenarios.ApplyFakeLlmProviderAsync(_fixture.Client);
-        using (var start = await _fixture.Client.CallToolAsync(
-            "tray.testhook.localSetup.start",
-            new { replaceExistingConfigurationConfirmed = true })) { }
-        using (var wait = await _fixture.Client.CallToolAsync(
-            "tray.testhook.connection.waitFor",
-            new { targetOverallState = "Ready", timeoutSeconds = 600 })) { }
+        // Wait for overall Ready (setup completed in fixture; this just
+        // confirms the connection has settled before we send).
+        using (var _ = await GatewayCompatScenarios.WaitForConnectionAsync(
+            _fixture.Client,
+            new { targetOverallState = "Ready" },
+            TimeSpan.FromSeconds(120))) { }
 
-        // Use app.agents (existing production MCP tool) to find a thread to send to.
-        // If no agents exist yet, the wizard hasn't run — fall back to "main".
         using var send = await _fixture.Client.CallToolAsync(
             "tray.testhook.chat.send",
             new { threadId = "main", message = "Hello from tool-events test", timeoutSeconds = 60 });
@@ -46,15 +45,8 @@ public class ToolEventsTests : IClassFixture<GatewayCompatFixture>
         Assert.True(sendRoot.GetProperty("sent").GetBoolean(),
             "chat.send returned sent=false. Payload: " + JsonSerializer.Serialize(sendRoot));
 
-        // Inspect the fake-LLM transcript: if the gateway forwarded the
-        // user message, tool-events handshake worked (the round-trip
-        // already happened). The fake LLM records every request to
-        // /__assert/last-request.
-        // We don't hit the fake LLM directly here because the gateway
-        // proxies; instead, we observe that the diagnostics dump now
-        // reports activity in the chat path. A future iteration can add
-        // an explicit assertion endpoint check by reading server.log
-        // through pairing.reset-style file inspection.
+        // Diagnostics dump confirms the chat path has been exercised. A
+        // future iteration can add an explicit tool-events log check.
         using var diag = await _fixture.Client.CallToolAsync(
             "tray.testhook.diagnostics.dump");
         using var diagPayload = GatewayCompatScenarios.UnwrapToolPayload(diag);

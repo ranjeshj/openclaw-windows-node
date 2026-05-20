@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -16,26 +17,22 @@ namespace OpenClaw.GatewayCompat.E2ETests;
 /// the production registration produced.
 /// </summary>
 [Trait("Tier", "Gateway")]
-public class NodePairingTests : IClassFixture<GatewayCompatFixture>
+[Collection("Gateway")]
+public class NodePairingTests
 {
-    private readonly GatewayCompatFixture _fixture;
+    private readonly GatewayCollectionFixture _fixture;
 
-    public NodePairingTests(GatewayCompatFixture fixture) => _fixture = fixture;
+    public NodePairingTests(GatewayCollectionFixture fixture) => _fixture = fixture;
 
     [GatewayCompatFact]
     public async Task NodeRoleReachesConnected_AdvertisesExpectedCapabilities()
     {
-        await GatewayCompatScenarios.ApplyFakeLlmProviderAsync(_fixture.Client);
-        using (var start = await _fixture.Client.CallToolAsync(
-            "tray.testhook.localSetup.start",
-            new { replaceExistingConfigurationConfirmed = true })) { }
-
-        // Wait for node role specifically — fully connected with NodePairingStatus.Paired.
-        using (var wait = await _fixture.Client.CallToolAsync(
-            "tray.testhook.connection.waitFor",
-            new { nodeConnected = true, paired = true, timeoutSeconds = 600 }))
+        // Setup + provider patch already done by GatewayCollectionFixture.
+        using (var payload = await GatewayCompatScenarios.WaitForConnectionAsync(
+            _fixture.Client,
+            new { nodeConnected = true, paired = true },
+            TimeSpan.FromSeconds(120)))
         {
-            using var payload = GatewayCompatScenarios.UnwrapToolPayload(wait);
             Assert.True(payload.RootElement.GetProperty("reached").GetBoolean(),
                 "Node never reached Connected+Paired. Last snapshot: " +
                 JsonSerializer.Serialize(payload.RootElement));
