@@ -428,9 +428,15 @@ public sealed class NodeService : IDisposable
         }
         lock (_capabilitiesLock)
         {
+            // Build a thin IWslCommandRunner reusing the same WslExeCommandRunner
+            // type the production LocalGatewaySetupEngine uses. The hook calls
+            // into it via the same RunInDistroAsync API the tray uses for every
+            // WSL operation — no parallel implementation.
+            var wsl = new OpenClawTray.Services.LocalGatewaySetup.WslExeCommandRunner(_logger, TimeSpan.FromMinutes(5));
             var hook = new OpenClawTray.Services.TestHooks.TestHookCapability(
                 _logger,
-                BuildTestHookDiagnosticsSnapshot);
+                BuildTestHookDiagnosticsSnapshot,
+                wsl);
             Register(hook, registerOnGateway: false);
         }
         _logger.Warn("Test hooks ENABLED (OPENCLAW_TRAY_E2E=1). tray.testhook.* registered on local MCP. This must NOT be a production build.");

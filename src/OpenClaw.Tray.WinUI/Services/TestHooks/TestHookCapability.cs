@@ -27,17 +27,17 @@
 //  Each tool implementation must include a comment that names the UI
 //  caller and the shared method, so future refactors can't drift.
 //  ===========================================================================
-//
-//  Tool surface (W3.2 — diagnostics.dump implemented, rest declared with
-//  NotImplementedYet so the harness can probe the surface). Later commits
-//  add the real implementations.
 // ============================================================================
 
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using OpenClaw.Shared;
+using OpenClawTray.Services.LocalGatewaySetup;
 
 namespace OpenClawTray.Services.TestHooks;
 
@@ -55,59 +55,72 @@ internal sealed class TestHookCapability : NodeCapabilityBase
 
     public override IReadOnlyList<string> Commands { get; } = new[]
     {
-        // Diagnostic — implemented in this commit.
         "tray.testhook.diagnostics.dump",
-        // Gateway config — implemented in a follow-up; writes a JSON5 patch
-        // into the WSL distro and runs `openclaw config validate`.
+        // Harness-only primitive (no UI equivalent — gateway config setup is
+        // normally handled by LocalGatewaySetup's GatewayConfigurationPreparer
+        // which writes a fixed loopback-only config; the patch hook lets the
+        // harness inject the fake-LLM provider on top via the same `openclaw
+        // config patch --file` CLI the user can run by hand).
         "tray.testhook.gateway.config.patch",
-        // Local setup orchestration — wraps LocalGatewaySetupEngine.
+        // localSetup.* wraps App.CreateLocalGatewaySetupEngine().RunLocalOnlyAsync
+        // — same method LocalSetupProgressPage's "Set up locally" handler calls.
         "tray.testhook.localSetup.start",
         "tray.testhook.localSetup.status",
         "tray.testhook.localSetup.cancel",
-        // Connection lifecycle.
+        // connection.waitFor observes GatewayConnectionManager (the same
+        // singleton every UI surface observes — see docs/CONNECTION_ARCHITECTURE.md).
         "tray.testhook.connection.waitFor",
+        // pairing.reset goes through GatewayRegistry.RemoveGateway — same
+        // method the Settings page "Reset pairing" button calls.
         "tray.testhook.pairing.reset",
-        // Chat round-trip.
+        // chat.send goes through OpenClawChatDataProvider.SendMessageAsync —
+        // same method ChatWindow.OnSendClicked invokes.
         "tray.testhook.chat.send",
     };
 
     private readonly Func<TestHookDiagnostics> _diagnosticsProvider;
+    private readonly IWslCommandRunner? _wslRunner;
     private readonly DateTimeOffset _startedAtUtc = DateTimeOffset.UtcNow;
 
-    public TestHookCapability(IOpenClawLogger logger, Func<TestHookDiagnostics> diagnosticsProvider)
+    public TestHookCapability(
+        IOpenClawLogger logger,
+        Func<TestHookDiagnostics> diagnosticsProvider,
+        IWslCommandRunner? wslRunner = null)
         : base(logger)
     {
         _diagnosticsProvider = diagnosticsProvider ?? throw new ArgumentNullException(nameof(diagnosticsProvider));
+        _wslRunner = wslRunner;
     }
 
     public static bool IsRuntimeEnabled() =>
         Environment.GetEnvironmentVariable(RuntimeEnabledEnvironmentVariable) == "1";
 
-    public override Task<NodeInvokeResponse> ExecuteAsync(NodeInvokeRequest request)
+    public override async Task<NodeInvokeResponse> ExecuteAsync(NodeInvokeRequest request)
     {
         if (!IsRuntimeEnabled())
         {
-            return Task.FromResult(Error(
-                "tray.testhook.* tools are gated by OPENCLAW_TRAY_E2E=1 at runtime"));
+            return Error("tray.testhook.* tools are gated by OPENCLAW_TRAY_E2E=1 at runtime");
         }
 
-        NodeInvokeResponse response = request.Command switch
+        switch (request.Command)
         {
-            "tray.testhook.diagnostics.dump" => Success(BuildDiagnosticsPayload()),
+            case "tray.testhook.diagnostics.dump":
+                return Success(BuildDiagnosticsPayload());
 
-            "tray.testhook.gateway.config.patch" or
-            "tray.testhook.localSetup.start" or
-            "tray.testhook.localSetup.status" or
-            "tray.testhook.localSetup.cancel" or
-            "tray.testhook.connection.waitFor" or
-            "tray.testhook.pairing.reset" or
-            "tray.testhook.chat.send"
-                => Error($"{request.Command} is declared but not yet implemented (W3.2 follow-up)"),
+            case "tray.testhook.gateway.config.patch":
+                return await GatewayConfigPatchAsync(request.Args).ConfigureAwait(false);
 
-            _ => Error($"Unknown command: {request.Command}"),
-        };
+            case "tray.testhook.localSetup.start":
+            case "tray.testhook.localSetup.status":
+            case "tray.testhook.localSetup.cancel":
+            case "tray.testhook.connection.waitFor":
+            case "tray.testhook.pairing.reset":
+            case "tray.testhook.chat.send":
+                return Error($"{request.Command} is declared but not yet implemented (W4 follow-up)");
 
-        return Task.FromResult(response);
+            default:
+                return Error($"Unknown command: {request.Command}");
+        }
     }
 
     private object BuildDiagnosticsPayload()
@@ -139,6 +152,114 @@ internal sealed class TestHookCapability : NodeCapabilityBase
             errors = snapshot.Errors,
         };
     }
+
+    // -----------------------------------------------------------------------
+    // tray.testhook.gateway.config.patch
+    //
+    // Writes a JSON5 patch (typically the fake-LLM provider) into the WSL
+    // distro and runs `openclaw config patch --file <path>` followed by
+    // `openclaw config validate`. Mirrors what a power user would do by
+    // hand per docs/GATEWAY_COMPAT_TESTING.md and tools/fake-llm-server/README.md.
+    //
+    // Same-path notes: there is no UI equivalent for free-form gateway
+    // config patching (the tray's own GatewayConfigurationPreparer writes
+    // a fixed loopback-only config). This hook is a harness primitive
+    // that uses the same `openclaw config patch` + `openclaw config validate`
+    // CLI surface the user can invoke from the command line — and the same
+    // IWslCommandRunner the tray uses for every other WSL operation.
+    //
+    // Args:
+    //   { distroName: string,
+    //     openclawBinPath?: string,    (default "/opt/openclaw/bin/openclaw")
+    //     patchJson: string,           (JSON5 patch body — required)
+    //     patchPath?: string,          (default "/home/openclaw/openclaw.patch.json5")
+    //     wslUser?: string             (default "openclaw")
+    //   }
+    // Returns:
+    //   { writeOk, writeStderr, patchOk, patchStdout, patchStderr,
+    //     validateOk, validateStdout, validateStderr, patchPath }
+    // -----------------------------------------------------------------------
+    private async Task<NodeInvokeResponse> GatewayConfigPatchAsync(JsonElement args)
+    {
+        if (_wslRunner is null)
+        {
+            return Error("gateway.config.patch requires an IWslCommandRunner — not provided by host");
+        }
+
+        var distroName = GetStringArg(args, "distroName");
+        if (string.IsNullOrWhiteSpace(distroName))
+        {
+            return Error("gateway.config.patch: 'distroName' is required");
+        }
+
+        var patchJson = GetStringArg(args, "patchJson");
+        if (string.IsNullOrWhiteSpace(patchJson))
+        {
+            return Error("gateway.config.patch: 'patchJson' is required");
+        }
+
+        var openclawBin = GetStringArg(args, "openclawBinPath") ?? "/opt/openclaw/bin/openclaw";
+        var patchPath = GetStringArg(args, "patchPath") ?? "/home/openclaw/openclaw.patch.json5";
+        var wslUser = GetStringArg(args, "wslUser") ?? "openclaw";
+
+        var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+
+        // Write the patch to the WSL filesystem via `cat > <path>` over stdin.
+        // We use a base64 round-trip to sidestep shell-quoting headaches in
+        // multi-line JSON5; `openclaw config patch` accepts JSON5 with
+        // newlines and comments.
+        var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(patchJson));
+        var writeScript = $"echo {ShellEscape(base64)} | base64 -d > {ShellEscape(patchPath)}";
+        var writeResult = await _wslRunner.RunInDistroAsync(
+            distroName,
+            new[] { "-u", wslUser, "--", "bash", "-lc", writeScript },
+            cts.Token).ConfigureAwait(false);
+
+        // openclaw config patch --file <path>
+        WslCommandResult? patchResult = null;
+        WslCommandResult? validateResult = null;
+        if (writeResult.Success)
+        {
+            patchResult = await _wslRunner.RunInDistroAsync(
+                distroName,
+                new[] { "-u", wslUser, "--", openclawBin, "config", "patch", "--file", patchPath },
+                cts.Token).ConfigureAwait(false);
+
+            if (patchResult.Success)
+            {
+                validateResult = await _wslRunner.RunInDistroAsync(
+                    distroName,
+                    new[] { "-u", wslUser, "--", openclawBin, "config", "validate" },
+                    cts.Token).ConfigureAwait(false);
+            }
+        }
+
+        var payload = new
+        {
+            writeOk = writeResult.Success,
+            writeStderr = writeResult.StandardError,
+            patchOk = patchResult?.Success ?? false,
+            patchStdout = patchResult?.StandardOutput,
+            patchStderr = patchResult?.StandardError,
+            validateOk = validateResult?.Success ?? false,
+            validateStdout = validateResult?.StandardOutput,
+            validateStderr = validateResult?.StandardError,
+            patchPath,
+        };
+
+        // Even when the gateway rejects the patch (validate fails), return
+        // Ok=true with the payload so the harness can inspect WHY rather
+        // than getting back an opaque "failed" string. The test asserts on
+        // payload.validateOk == true.
+        return Success(payload);
+    }
+
+    /// <summary>
+    /// Single-quote a value for embedding in a bash command, escaping any
+    /// embedded single quotes.
+    /// </summary>
+    private static string ShellEscape(string value) =>
+        "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
 }
 
 /// <summary>
