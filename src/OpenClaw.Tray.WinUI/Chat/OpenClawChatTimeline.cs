@@ -1115,34 +1115,54 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
 
                 var headerRow = Border(
                     Grid(
-                        [GridSize.Auto, GridSize.Auto, GridSize.Auto, GridSize.Star(), GridSize.Auto],
+                        // Outer 2-col layout: Star = left content (chevron /
+                        // ⚡ / label / summary), Auto = status pill on the
+                        // right. The Auto column always renders at its
+                        // natural width, and the Star column is forced to
+                        // ``parent_width - pill_width`` during measure — so
+                        // Done can never be clipped by the card's rounded
+                        // corner. Inside the Star column an inner Grid
+                        // arranges the four left elements with summary in
+                        // its own Star sub-column, so the summary trims
+                        // with an ellipsis when the card is narrow.
+                        [GridSize.Star(), GridSize.Auto],
                         [GridSize.Auto],
-                        Caption(chevron).Foreground(TertiaryText)
-                            .VAlign(VerticalAlignment.Center)
-                            .Grid(row: 0, column: 0),
-                        Caption("⚡").Foreground(statusFg)
-                            .VAlign(VerticalAlignment.Center)
-                            .Margin(6, 0, 0, 0)
-                            .Grid(row: 0, column: 1),
-                        Caption(labelText).Foreground(SecondaryText)
-                            .Set(t =>
-                            {
-                                t.FontFamily = new FontFamily("Cascadia Code, Cascadia Mono, Consolas");
-                                t.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
-                            })
-                            .VAlign(VerticalAlignment.Center)
-                            .Margin(6, 0, 0, 0)
-                            .Grid(row: 0, column: 2),
-                        Caption(string.IsNullOrEmpty(summary) ? string.Empty : "· " + summary)
-                            .Foreground(TertiaryText)
-                            .Set(t =>
-                            {
-                                t.TextTrimming = TextTrimming.CharacterEllipsis;
-                                t.MaxLines = 1;
-                            })
-                            .VAlign(VerticalAlignment.Center)
-                            .Margin(6, 0, 12, 0)
-                            .Grid(row: 0, column: 3),
+                        Grid(
+                            [GridSize.Auto, GridSize.Auto, GridSize.Auto, GridSize.Star()],
+                            [GridSize.Auto],
+                            Caption(chevron).Foreground(TertiaryText)
+                                .VAlign(VerticalAlignment.Center)
+                                .Grid(row: 0, column: 0),
+                            Caption("⚡").Foreground(statusFg)
+                                .VAlign(VerticalAlignment.Center)
+                                .Margin(6, 0, 0, 0)
+                                .Grid(row: 0, column: 1),
+                            Caption(labelText).Foreground(SecondaryText)
+                                .Set(t =>
+                                {
+                                    t.FontFamily = new FontFamily("Cascadia Code, Cascadia Mono, Consolas");
+                                    t.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+                                })
+                                .VAlign(VerticalAlignment.Center)
+                                .Margin(6, 0, 0, 0)
+                                .Grid(row: 0, column: 2),
+                            Caption(string.IsNullOrEmpty(summary) ? string.Empty : "· " + summary)
+                                .Foreground(TertiaryText)
+                                .Set(t =>
+                                {
+                                    // TextWrapping=Wrap is required so the
+                                    // TextBlock honors the Star sub-column
+                                    // width during measure; combined with
+                                    // MaxLines=1 + TextTrimming this gives
+                                    // a single-line ellipsis.
+                                    t.TextWrapping = TextWrapping.Wrap;
+                                    t.TextTrimming = TextTrimming.CharacterEllipsis;
+                                    t.MaxLines = 1;
+                                })
+                                .VAlign(VerticalAlignment.Center)
+                                .Margin(6, 0, 12, 0)
+                                .Grid(row: 0, column: 3)
+                        ).Grid(row: 0, column: 0),
                         Border(
                             Caption(statusText)
                                 .Foreground(themeBrush("TextOnAccentFillColorPrimaryBrush"))
@@ -1154,7 +1174,7 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
                          .Set(b => b.MinHeight = 18)
                          .VAlign(VerticalAlignment.Center)
                          .HAlign(HorizontalAlignment.Right)
-                         .Grid(row: 0, column: 4)
+                         .Grid(row: 0, column: 1)
                     ).HAlign(HorizontalAlignment.Stretch).Padding(bubblePadding.Left, bubblePadding.Top, bubblePadding.Right, bubblePadding.Bottom)
                 ).Set(b => b.MinHeight = 32);
 
@@ -1384,7 +1404,14 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
                     {
                         // Inside the assistant bubble: stretch to bubble
                         // content width. No MaxWidth, no Width binding —
-                        // the parent bubble's content area sizes us.
+                        // the parent bubble's content area sizes us. The
+                        // MinWidth floor mirrors the external mode so a
+                        // narrow assistant bubble (e.g. "Done.") doesn't
+                        // crush the 5-column header grid (chevron / ⚡ /
+                        // label / summary / status pill) and clip the
+                        // status pill at the rounded right corner. The
+                        // bubble grows to fit if its text is shorter.
+                        b.MinWidth = 360;
                         b.HorizontalAlignment = HorizontalAlignment.Stretch;
                         return;
                     }
@@ -1408,7 +1435,15 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
                         void Sync()
                         {
                             var w = slotBubble.ActualWidth - toolIndent;
-                            if (w > 0) b.Width = w;
+                            // Clamp to MinWidth so the 5-column header grid
+                            // (chevron / ⚡ / label / summary / status pill)
+                            // never overflows when the assistant bubble is
+                            // narrow (e.g. "Done."). Without this clamp the
+                            // Star summary column shrinks to 0 but Auto
+                            // columns still take natural width, pushing the
+                            // status pill past the card's rounded-corner
+                            // clip and visually truncating "Done".
+                            if (w > 0) b.Width = Math.Max(360, w);
                         }
                         // Keep the SizeChanged subscription paired with the
                         // card's lifetime: every re-render creates a fresh
@@ -1440,17 +1475,20 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
                 ? card.HAlign(HorizontalAlignment.Stretch)
                 : AnchorLeft(card).HAlign(HorizontalAlignment.Stretch).Margin(toolLeftMargin, 6, gutter, 6);
 
-            // Wrap the card in a left-anchored Auto/Star Grid so its 704-wide
-            // slot stays pinned to toolLeftMargin instead of being centered
-            // inside the wider timeline column (WinUI's quirk: HAlign=Stretch
-            // with finite MaxWidth centers when the slot is bigger than the
-            // MaxWidth). The Auto column sizes to the card's MaxWidth, the
-            // Star column eats the remaining width on the right.
+            // Wrap the card in a left-anchored single-Star Grid so the card
+            // is measured with the **finite** parent slot width instead of
+            // infinity. Previously this used [Auto, Star] with the card in
+            // the Auto column, which gave the card unbounded measure — and
+            // when the summary text was long, the card grew to its MaxWidth
+            // (720) and overflowed narrow chat viewports, clipping the
+            // status pill on the right. With a single Star column the
+            // card.HAlign=Left anchors it to the left at its natural width
+            // up to the column's actual width, so it can never exceed the
+            // chat surface.
             Element AnchorLeft(Element card) => Grid(
-                [GridSize.Auto, GridSize.Star()],
+                [GridSize.Star()],
                 [GridSize.Auto],
-                card.Grid(row: 0, column: 0),
-                Empty().Grid(row: 0, column: 1)
+                card.Grid(row: 0, column: 0)
             ).HAlign(HorizontalAlignment.Stretch);
 
             // Build the per-step rows once — used by Plain, TaskHeader, and
@@ -1483,32 +1521,39 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
 
                 var summaryHeader = Border(
                     Grid(
-                        [GridSize.Auto, GridSize.Auto, GridSize.Auto, GridSize.Star(), GridSize.Auto],
+                        // 2-col layout (left content Star + status pill Auto)
+                        // — see headerRow above for the rationale.
+                        [GridSize.Star(), GridSize.Auto],
                         [GridSize.Auto],
-                        Caption(summaryChevron).Foreground(TertiaryText)
-                            .VAlign(VerticalAlignment.Center)
-                            .Grid(row: 0, column: 0),
-                        Caption("⚡").Foreground(taskStatusBg)
-                            .VAlign(VerticalAlignment.Center)
-                            .Margin(6, 0, 0, 0)
-                            .Grid(row: 0, column: 1),
-                        Caption($"Task · {stepCount} steps").Foreground(SecondaryText)
-                            .Set(t =>
-                            {
-                                t.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
-                            })
-                            .VAlign(VerticalAlignment.Center)
-                            .Margin(6, 0, 0, 0)
-                            .Grid(row: 0, column: 2),
-                        Caption("· " + toolList).Foreground(TertiaryText)
-                            .Set(t =>
-                            {
-                                t.TextTrimming = TextTrimming.CharacterEllipsis;
-                                t.MaxLines = 1;
-                            })
-                            .VAlign(VerticalAlignment.Center)
-                            .Margin(6, 0, 12, 0)
-                            .Grid(row: 0, column: 3),
+                        Grid(
+                            [GridSize.Auto, GridSize.Auto, GridSize.Auto, GridSize.Star()],
+                            [GridSize.Auto],
+                            Caption(summaryChevron).Foreground(TertiaryText)
+                                .VAlign(VerticalAlignment.Center)
+                                .Grid(row: 0, column: 0),
+                            Caption("⚡").Foreground(taskStatusBg)
+                                .VAlign(VerticalAlignment.Center)
+                                .Margin(6, 0, 0, 0)
+                                .Grid(row: 0, column: 1),
+                            Caption($"Task · {stepCount} steps").Foreground(SecondaryText)
+                                .Set(t =>
+                                {
+                                    t.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
+                                })
+                                .VAlign(VerticalAlignment.Center)
+                                .Margin(6, 0, 0, 0)
+                                .Grid(row: 0, column: 2),
+                            Caption("· " + toolList).Foreground(TertiaryText)
+                                .Set(t =>
+                                {
+                                    t.TextWrapping = TextWrapping.Wrap;
+                                    t.TextTrimming = TextTrimming.CharacterEllipsis;
+                                    t.MaxLines = 1;
+                                })
+                                .VAlign(VerticalAlignment.Center)
+                                .Margin(6, 0, 12, 0)
+                                .Grid(row: 0, column: 3)
+                        ).Grid(row: 0, column: 0),
                         Border(
                             Caption(taskStatusText).Foreground(themeBrush("TextOnAccentFillColorPrimaryBrush"))
                                 .Set(t => { t.FontSize = 11; t.LineHeight = 16; })
@@ -1519,7 +1564,7 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
                          .Set(b => b.MinHeight = 18)
                          .VAlign(VerticalAlignment.Center)
                          .HAlign(HorizontalAlignment.Right)
-                         .Grid(row: 0, column: 4)
+                         .Grid(row: 0, column: 1)
                     ).HAlign(HorizontalAlignment.Stretch).Padding(bubblePadding.Left, bubblePadding.Top, bubblePadding.Right, bubblePadding.Bottom)
                 ).Set(b => b.MinHeight = 32);
 
