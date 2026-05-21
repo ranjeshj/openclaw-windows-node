@@ -441,7 +441,8 @@ public sealed class OpenClawChatRoot : Component
                 OnSettingsClick: _onSettingsClick,
                 VoiceTranscript: voiceTranscript.Value,
                 VoiceAudioLevel: voiceAudioLevel.Value,
-                RegisterVoiceStarter: starter => TriggerVoiceRecording = starter))
+                RegisterVoiceStarter: starter => TriggerVoiceRecording = starter,
+                OnAttachmentPasted: att => pendingAttachment.Set(att)))
             : Empty();
 
         var divider = Empty();

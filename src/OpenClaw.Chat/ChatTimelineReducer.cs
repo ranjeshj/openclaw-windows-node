@@ -191,18 +191,32 @@ public static class ChatTimelineReducer
 
         if (replace && reconcilePrevious && state.Entries.Count > 0)
         {
-            var lastIndex = state.Entries.Count - 1;
-            var last = state.Entries[lastIndex];
-            if (last.Kind == ChatTimelineItemKind.Assistant)
+            // Scan backward for the most recent Assistant entry — not just
+            // the very last one. The gateway can emit a final message
+            // event AFTER tool entries have been appended (text → tool →
+            // tool output → final text), in which case the immediate last
+            // entry is a ToolCall. Without this scan, the final message
+            // would create a brand-new assistant entry that duplicates
+            // the streaming text the user already saw before the tool ran.
+            for (var li = state.Entries.Count - 1; li >= 0; li--)
             {
-                return state with
+                var candidate = state.Entries[li];
+                if (candidate.Kind == ChatTimelineItemKind.Assistant)
                 {
-                    Entries = state.Entries.SetItem(lastIndex, last with
+                    return state with
                     {
-                        Text = text,
-                        IsStreaming = streaming
-                    })
-                };
+                        Entries = state.Entries.SetItem(li, candidate with
+                        {
+                            Text = text,
+                            IsStreaming = streaming
+                        })
+                    };
+                }
+                // Stop scanning once we hit a User entry — that's a turn
+                // boundary, the assistant entry above it belongs to a
+                // previous turn and must not be reconciled into.
+                if (candidate.Kind == ChatTimelineItemKind.User)
+                    break;
             }
         }
 

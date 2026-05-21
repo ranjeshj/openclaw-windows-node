@@ -190,6 +190,45 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
     static double ClampOffset(double offset, double max) =>
         Math.Max(0, Math.Min(offset, max));
 
+    /// <summary>
+    /// Process-wide cache so we decode each cached image only once. Keyed by
+    /// byte-array reference so cache invalidates automatically when bytes
+    /// are replaced. BitmapImage instances are UI-thread-affine but read
+    /// access from other threads through ImageBrush is safe.
+    /// </summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<byte[], Microsoft.UI.Xaml.Media.Imaging.BitmapImage> _bitmapCache = new();
+
+    /// <summary>
+    /// Decodes <paramref name="bytes"/> into a <see cref="Microsoft.UI.Xaml.Media.Imaging.BitmapImage"/>,
+    /// caching the result so repeated renders of the same image don't re-run
+    /// the decoder. Returns <c>null</c> on any decode failure (renderer will
+    /// fall back to a filename chip).
+    /// </summary>
+    static Microsoft.UI.Xaml.Media.Imaging.BitmapImage? TryDecodeBitmap(byte[] bytes)
+    {
+        if (_bitmapCache.TryGetValue(bytes, out var existing))
+            return existing;
+        try
+        {
+            var stream = new global::Windows.Storage.Streams.InMemoryRandomAccessStream();
+            using (var writer = new global::Windows.Storage.Streams.DataWriter(stream))
+            {
+                writer.WriteBytes(bytes);
+                writer.StoreAsync().AsTask().GetAwaiter().GetResult();
+                writer.DetachStream();
+            }
+            stream.Seek(0);
+            var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+            bmp.SetSource(stream);
+            _bitmapCache.Add(bytes, bmp);
+            return bmp;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public override Element Render()
     {
         // Subscribe to ChatExplorationState so toggles live-rerender the
@@ -746,17 +785,52 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
             var hasMessage = !string.IsNullOrEmpty(messageText);
             var hasAttachments = attachmentNames.Count > 0;
 
-            // Build attachment card(s) — distinct from the text bubble with
-            // a subtle background, file icon, and filename. Right-aligned
-            // like user bubbles but visually differentiated.
-            Element attachmentCards = Empty();
+            // Build attachment elements. Images become real thumbnail previews
+            // by pulling the original bytes from OpenClawChatDataProvider's
+            // ImagePreviewCache (populated on Send). Non-image attachments
+            // remain as compact icon+name chips. Both are placed *inside* the
+            // same bubble as the message text so the user sees a single
+            // unified message — matching how Slack/iMessage/etc. show
+            // image-with-caption posts.
+            var attachmentElements = new List<Element>();
             if (hasAttachments)
             {
-                var cards = new List<Element>();
-                foreach (var (icon, name, isImage) in attachmentNames)
+                foreach (var (_, name, isImage) in attachmentNames)
                 {
+                    if (isImage && OpenClawChatDataProvider.ImagePreviewCache.TryGetValue(name, out var bytes))
+                    {
+                        var bmp = TryDecodeBitmap(bytes);
+                        if (bmp is not null)
+                        {
+                            const double maxW = 280;
+                            const double maxH = 200;
+                            var pw = bmp.PixelWidth > 0 ? bmp.PixelWidth : (int)maxW;
+                            var ph = bmp.PixelHeight > 0 ? bmp.PixelHeight : (int)maxH;
+                            var scale = Math.Min(Math.Min(maxW / pw, maxH / ph), 1.0);
+                            var w = pw * scale;
+                            var h = ph * scale;
+
+                            attachmentElements.Add(
+                                Border(Empty())
+                                    .CornerRadius(8)
+                                    .Set(b =>
+                                    {
+                                        b.Width = w;
+                                        b.Height = h;
+                                        b.Background = new ImageBrush
+                                        {
+                                            ImageSource = bmp,
+                                            Stretch = Stretch.UniformToFill,
+                                        };
+                                        b.HorizontalAlignment = HorizontalAlignment.Right;
+                                    }));
+                            continue;
+                        }
+                    }
+
+                    // Fallback chip (file attachment or missing image bytes).
                     var fileGlyph = isImage ? "\uEB9F" : "\uE8A5"; // Photo / Page
-                    var card = Border(
+                    attachmentElements.Add(Border(
                         Grid([GridSize.Auto, GridSize.Star()], [GridSize.Auto],
                             Border(
                                 TextBlock(fileGlyph)
@@ -787,24 +861,23 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
                         )
                     ).Set(b =>
                     {
-                        b.CornerRadius = bubbleRadius;
-                        b.Padding = new Thickness(10, 8, 14, 8);
-                        b.VerticalAlignment = VerticalAlignment.Center;
+                        b.CornerRadius = new CornerRadius(6);
+                        b.Padding = new Thickness(8, 6, 12, 6);
                         b.BorderThickness = new Thickness(1);
                         b.BorderBrush = new SolidColorBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF));
-                    }).Background(ChatVisualResolver.UserBubbleBrush(
-                        themeBrush("AccentFillColorSecondaryBrush")));
-
-                    cards.Add(card.HAlign(HorizontalAlignment.Right));
+                        b.Background = new SolidColorBrush(Color.FromArgb(0x20, 0xFF, 0xFF, 0xFF));
+                    }));
                 }
-                attachmentCards = VStack(4, cards.ToArray());
             }
 
-            // Standard text bubble (only when there's actual text).
-            Element bubble = Empty();
+            // Build the unified bubble: attachments stacked at the top, text
+            // below them. A single Border with the user-bubble background +
+            // bubbleRadius wraps both so they read as one message.
+            var bubbleChildren = new List<Element>();
+            foreach (var ae in attachmentElements) bubbleChildren.Add(ae);
             if (hasMessage)
             {
-                bubble = Border(
+                bubbleChildren.Add(
                     TextBlock(messageText)
                         .Set(t =>
                         {
@@ -812,24 +885,31 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
                             t.FontSize = 14;
                             t.Foreground = userBubbleFg;
                             t.IsTextSelectionEnabled = true;
-                        })
+                        }));
+            }
+
+            Element content;
+            if (bubbleChildren.Count > 0)
+            {
+                content = Border(
+                    VStack(8, bubbleChildren.ToArray())
                 ).Background(userBubbleBg)
                  .Set(b =>
                  {
                      b.CornerRadius = bubbleRadius;
-                     b.Padding = bubblePadding;
+                     // When the bubble contains only an image, tighten the
+                     // padding so the thumbnail nearly fills the bubble.
+                     b.Padding = (hasAttachments && !hasMessage)
+                         ? new Thickness(6, 6, 6, 6)
+                         : bubblePadding;
                      b.VerticalAlignment = VerticalAlignment.Center;
-                 });
+                 })
+                 .HAlign(HorizontalAlignment.Right);
             }
-
-            // Combine: text bubble above attachment card(s).
-            Element content;
-            if (hasMessage && hasAttachments)
-                content = VStack(4, bubble.HAlign(HorizontalAlignment.Right), attachmentCards);
-            else if (hasAttachments)
-                content = attachmentCards;
             else
-                content = bubble.HAlign(HorizontalAlignment.Right);
+            {
+                content = Empty();
+            }
 
             // Avatar shown only on the LAST entry of a same-sender burst,
             // and only when ChatExplorationState.AvatarMode allows. When

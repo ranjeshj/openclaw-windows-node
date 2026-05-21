@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -59,6 +60,16 @@ internal static class LocalizationHelper
 /// </remarks>
 public sealed class OpenClawChatDataProvider : IChatDataProvider
 {
+    /// <summary>
+    /// Process-wide cache mapping an attachment's filename to its raw image
+    /// bytes. Populated by <see cref="SendMessageAsync"/> for image
+    /// attachments so the timeline can render an actual thumbnail in the
+    /// user bubble (the display-text marker only carries the filename, not
+    /// the base64 content). Static so any timeline render after a re-mount
+    /// can still find the image.
+    /// </summary>
+    public static readonly ConcurrentDictionary<string, byte[]> ImagePreviewCache = new();
+
     private readonly IChatGatewayBridge _bridge;
     private readonly Action<Action>? _post;
     private readonly object _gate = new();
@@ -148,6 +159,21 @@ public sealed class OpenClawChatDataProvider : IChatDataProvider
 
         var trimmed = message.Trim();
         var nonce = Guid.NewGuid().ToString("N");
+
+        // Cache image attachments by filename so the timeline can render an
+        // actual thumbnail preview (the display-text marker only carries the
+        // filename — see ImagePreviewCache notes).
+        if (hasAttachments)
+        {
+            foreach (var a in attachments!)
+            {
+                if (a.Type == "image" && !string.IsNullOrEmpty(a.FileName) && !string.IsNullOrEmpty(a.Content))
+                {
+                    try { ImagePreviewCache[a.FileName] = Convert.FromBase64String(a.Content); }
+                    catch { /* skip un-decodable bytes */ }
+                }
+            }
+        }
 
         // Build the display text for the user bubble. When attachments are
         // present, append a structured indicator line so the bubble is never
@@ -859,12 +885,13 @@ public sealed class OpenClawChatDataProvider : IChatDataProvider
         var role = message.Role ?? "";
         var roleLower = role.ToLowerInvariant();
 
-        // User echoes are dropped — SendMessageAsync already added the local
-        // entry that drove the round-trip. EXCEPTION: live ``role=user``
-        // frames whose body is a System (untrusted)/System control note are
-        // gateway provenance markers, not real user turns; route them as a
-        // dim status entry to mirror the chat.history path (HIGH 2 chat
-        // rubber-duck MEDIUM 2 — keep the trust taxonomy visible live).
+        // ``role=user`` frames on the live stream are gateway echoes of our
+        // own SendMessageAsync — the local AddLocalUser path already added
+        // that bubble. The lone exception is the System control note path
+        // (handled below). Cross-client user echoes (e.g. dashboard sender)
+        // arrive only via chat.history fetches, not the live stream, so we
+        // intentionally drop everything else here. Reviving them would
+        // double-render every locally-sent message.
         if (roleLower == "user")
         {
             if (LooksLikeSystemControlNote(message.Text))
@@ -876,6 +903,7 @@ public sealed class OpenClawChatDataProvider : IChatDataProvider
                 ApplyEventAndPublish(sysThread,
                     new ChatStatusEvent(TruncateForChatEntry(message.Text), ChatTone.Dim),
                     sysMeta);
+                return;
             }
             return;
         }

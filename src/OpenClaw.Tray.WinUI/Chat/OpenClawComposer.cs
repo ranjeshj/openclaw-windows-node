@@ -62,7 +62,8 @@ public record OpenClawComposerProps(
     Action? OnSettingsClick = null,
     string? VoiceTranscript = null,
     float VoiceAudioLevel = 0f,
-    Action<Action>? RegisterVoiceStarter = null);
+    Action<Action>? RegisterVoiceStarter = null,
+    Action<ChatAttachment>? OnAttachmentPasted = null);
 
 public sealed class OpenClawComposer : Component<OpenClawComposerProps>
 {
@@ -109,6 +110,12 @@ public sealed class OpenClawComposer : Component<OpenClawComposerProps>
         var voiceStoppedRef = UseRef(false);
         // TextBox reference for focusing after recording completes
         var textBoxRef = UseRef<TextBox?>(null);
+        // One-time hook flag for the TextBox Paste event so we don't re-attach
+        // the handler on every re-render (Set() runs each render).
+        var pasteHookedRef = UseRef(false);
+        // Cache the BitmapImage built for the current attachment so we rebuild
+        // it only when the attachment instance changes (not on every render).
+        var attachmentImageRef = UseRef<(ChatAttachment? Att, Microsoft.UI.Xaml.Media.Imaging.BitmapImage? Bmp)>((null, null));
 
         // Extracted voice-start action so it can be triggered programmatically (e.g. hotkey)
         Action startVoiceRecording = () =>
@@ -273,88 +280,281 @@ public sealed class OpenClawComposer : Component<OpenClawComposerProps>
                 tb.PlaceholderText = recording
                     ? LocalizationHelper.GetString("Chat_Voice_ListeningPrompt")
                     : placeholder;
+                // Keep AcceptsReturn=false: this lets us intercept *every*
+                // Enter key in OnKeyDown reliably. When the user holds Shift,
+                // we manually insert a newline at the caret below. This avoids
+                // the routed-event ordering problem where the TextBox's class
+                // handler can swallow Enter before our handler runs.
                 tb.AcceptsReturn = false;
                 tb.TextWrapping = TextWrapping.Wrap;
                 tb.MinHeight = 56;
+                tb.MaxHeight = 200;
                 tb.IsEnabled = isConnected;
-                tb.CornerRadius = composerCornerRadius;
-                if (recording)
+                // Strip the TextBox's own chrome — the wrapper Border below
+                // (composerInput) provides the unified border + corner radius
+                // so the optional attachment preview visually sits inside the
+                // same input "card" as the typed text.
+                tb.BorderThickness = new Thickness(0);
+                tb.BorderBrush = new SolidColorBrush(Colors.Transparent);
+                tb.Background = new SolidColorBrush(Colors.Transparent);
+                tb.CornerRadius = new CornerRadius(0);
+                // The TextBox template draws an additional "focus underline"
+                // using TextControlBorderThemeThicknessFocused (default 0,0,0,2)
+                // and a static top/side line via TextControlBorderThemeThickness
+                // even when our BorderThickness=0 (template binds its inner
+                // BorderElement to those theme thicknesses directly). Zero them
+                // out plus force every TextControl BorderBrush variant to
+                // transparent so the wrapper Border (composerInput) is the
+                // only chrome visible.
+                tb.Resources["TextControlBorderThemeThickness"] = new Thickness(0);
+                tb.Resources["TextControlBorderThemeThicknessFocused"] = new Thickness(0);
+                tb.Resources["TextControlBackground"] = new SolidColorBrush(Colors.Transparent);
+                tb.Resources["TextControlBackgroundFocused"] = new SolidColorBrush(Colors.Transparent);
+                tb.Resources["TextControlBackgroundPointerOver"] = new SolidColorBrush(Colors.Transparent);
+                tb.Resources["TextControlBorderBrush"] = new SolidColorBrush(Colors.Transparent);
+                tb.Resources["TextControlBorderBrushFocused"] = new SolidColorBrush(Colors.Transparent);
+                tb.Resources["TextControlBorderBrushPointerOver"] = new SolidColorBrush(Colors.Transparent);
+
+                if (!pasteHookedRef.Current)
                 {
-                    // Accent border to indicate active recording
-                    tb.BorderBrush = (Brush)Microsoft.UI.Xaml.Application.Current.Resources["AccentFillColorDefaultBrush"];
-                    tb.BorderThickness = new Thickness(2);
+                    pasteHookedRef.Current = true;
+                    tb.Paste += async (s, e) =>
+                    {
+                        try
+                        {
+                            var att = await TryReadImageFromClipboardAsync();
+                            if (att is not null)
+                            {
+                                e.Handled = true;
+                                Props.OnAttachmentPasted?.Invoke(att);
+                            }
+                        }
+                        catch
+                        {
+                            // If anything goes wrong reading the clipboard,
+                            // fall through to the default text paste behavior.
+                        }
+                    };
                 }
             })
-            .OnKeyDown((_, e) =>
+            .OnKeyDown((sender, e) =>
             {
                 if (e.Key == global::Windows.System.VirtualKey.Enter)
                 {
+                    var shift = Microsoft.UI.Input.InputKeyboardSource
+                        .GetKeyStateForCurrentThread(global::Windows.System.VirtualKey.Shift);
+                    var shiftDown = shift.HasFlag(global::Windows.UI.Core.CoreVirtualKeyStates.Down);
                     e.Handled = true;
-                    sendActionRef.Current();
+                    if (shiftDown && sender is TextBox tb)
+                    {
+                        // Insert a newline at the caret position. AcceptsReturn
+                        // is false, so we do this manually instead of letting
+                        // the TextBox handle it (which would race with the
+                        // routed-event order and could either fail to insert
+                        // or also trigger send).
+                        var pos = tb.SelectionStart;
+                        var len = tb.SelectionLength;
+                        var text = tb.Text ?? string.Empty;
+                        var safePos = Math.Min(Math.Max(pos, 0), text.Length);
+                        var safeEnd = Math.Min(safePos + Math.Max(len, 0), text.Length);
+                        tb.Text = text.Substring(0, safePos) + "\n" + text.Substring(safeEnd);
+                        tb.SelectionStart = safePos + 1;
+                        tb.SelectionLength = 0;
+                        inputRef.Current = tb.Text;
+                        hasTextState.Set(!string.IsNullOrWhiteSpace(tb.Text));
+                    }
+                    else
+                    {
+                        sendActionRef.Current();
+                    }
                 }
             });
 
         // ── Row 3: action icons (right-aligned) ────────────────────────
 
-        // ── Attachment chip (shown between textbox and actions when a file is pending) ──
-        Element attachmentChip = Empty();
+        // ── Attachment preview (rendered INSIDE the composer input card) ──
+        // For images, a real thumbnail is shown so the user can confirm what
+        // they pasted/picked. For other files a compact icon+name chip is
+        // shown. The preview sits inside the same Border as the textbox so it
+        // visually reads as part of the chat input.
+        Element attachmentPreview = Empty();
         if (Props.PendingAttachment is { } att)
         {
             var isImage = att.Type == "image";
-            var icon = isImage ? "\uEB9F" : "\uE8A5"; // Photo / Page glyph
-            attachmentChip = Border(
-                Grid([GridSize.Auto, GridSize.Star(), GridSize.Auto], [GridSize.Auto],
-                    TextBlock(icon)
+
+            Element removeBtn = Button(
+                    TextBlock("\uE711") // Cancel glyph
                         .Set(t =>
                         {
                             t.FontFamily = new FontFamily("Segoe Fluent Icons");
-                            t.FontSize = 12;
-                            t.VerticalAlignment = VerticalAlignment.Center;
-                        })
-                        .Grid(row: 0, column: 0),
-                    TextBlock($"{att.FileName}  ({att.FormatSize()})")
+                            t.FontSize = 10;
+                        }),
+                    () => Props.OnAttachmentRemoved?.Invoke())
+                .Set(b =>
+                {
+                    b.Padding = new Thickness(4, 2, 4, 2);
+                    b.MinWidth = 0; b.MinHeight = 0;
+                    b.CornerRadius = new CornerRadius(4);
+                })
+                .Resources(r => r
+                    .Set("ButtonBackground", new SolidColorBrush(Colors.Transparent))
+                    .Set("ButtonBackgroundPointerOver", Ref("SubtleFillColorSecondaryBrush"))
+                    .Set("ButtonBackgroundPressed", Ref("SubtleFillColorTertiaryBrush"))
+                    .Set("ButtonBorderBrush", new SolidColorBrush(Colors.Transparent))
+                    .Set("ButtonBorderBrushPointerOver", new SolidColorBrush(Colors.Transparent))
+                    .Set("ButtonBorderBrushPressed", new SolidColorBrush(Colors.Transparent)))
+                .AutomationName("Remove attachment");
+
+            if (isImage)
+            {
+                // Build (and cache) a BitmapImage from the base64 content.
+                // Rebuild only when the attachment instance changes — base64
+                // decode + stream copy is non-trivial work to repeat per
+                // keystroke re-render.
+                var cached = attachmentImageRef.Current;
+                Microsoft.UI.Xaml.Media.Imaging.BitmapImage? bmp = cached.Bmp;
+                if (!ReferenceEquals(cached.Att, att) || bmp is null)
+                {
+                    bmp = TryCreateBitmapFromBase64(att.Content);
+                    attachmentImageRef.Current = (att, bmp);
+                }
+
+                Element thumb;
+                if (bmp is not null)
+                {
+                    // Fit the thumbnail inside a 160×96 box while preserving
+                    // aspect ratio (downscale only, never upscale tiny pastes).
+                    const double maxW = 160;
+                    const double maxH = 96;
+                    var pw = bmp.PixelWidth > 0 ? bmp.PixelWidth : (int)maxW;
+                    var ph = bmp.PixelHeight > 0 ? bmp.PixelHeight : (int)maxH;
+                    var scale = Math.Min(Math.Min(maxW / pw, maxH / ph), 1.0);
+                    var thumbW = pw * scale;
+                    var thumbH = ph * scale;
+
+                    thumb = Border(Empty())
+                        .CornerRadius(4)
+                        .Set(b =>
+                        {
+                            b.Width = thumbW;
+                            b.Height = thumbH;
+                            b.Background = new Microsoft.UI.Xaml.Media.ImageBrush
+                            {
+                                ImageSource = bmp,
+                                Stretch = Stretch.UniformToFill,
+                            };
+                            b.BorderThickness = new Thickness(1);
+                            b.BorderBrush = (Brush)Microsoft.UI.Xaml.Application.Current.Resources["CardStrokeColorDefaultBrush"];
+                        });
+                }
+                else
+                {
+                    thumb = TextBlock("\uEB9F")
                         .Set(t =>
                         {
-                            t.FontSize = 12;
-                            t.TextTrimming = TextTrimming.CharacterEllipsis;
+                            t.FontFamily = new FontFamily("Segoe Fluent Icons");
+                            t.FontSize = 16;
                             t.VerticalAlignment = VerticalAlignment.Center;
-                            t.Margin = new Thickness(6, 0, 0, 0);
-                        })
-                        .Grid(row: 0, column: 1),
-                    Button(
-                        TextBlock("\uE711") // Cancel glyph
+                        });
+                }
+
+                // Circular close button that floats in the top-right corner
+                // of the thumbnail. Distinct from the chip's flat removeBtn
+                // because we need an opaque background (so the × is readable
+                // over any image) and a contrast-friendly hover.
+                var floatingRemove = Button(
+                        TextBlock("\uE711")
                             .Set(t =>
                             {
                                 t.FontFamily = new FontFamily("Segoe Fluent Icons");
                                 t.FontSize = 10;
+                                t.HorizontalAlignment = HorizontalAlignment.Center;
+                                t.VerticalAlignment = VerticalAlignment.Center;
                             }),
                         () => Props.OnAttachmentRemoved?.Invoke())
-                        .Set(b =>
-                        {
-                            b.Padding = new Thickness(4, 2, 4, 2);
-                            b.MinWidth = 0; b.MinHeight = 0;
-                            b.CornerRadius = new CornerRadius(4);
-                        })
-                        .Resources(r => r
-                            .Set("ButtonBackground", new SolidColorBrush(Colors.Transparent))
-                            .Set("ButtonBackgroundPointerOver", Ref("SubtleFillColorSecondaryBrush"))
-                            .Set("ButtonBackgroundPressed", Ref("SubtleFillColorTertiaryBrush"))
-                            .Set("ButtonBorderBrush", new SolidColorBrush(Colors.Transparent))
-                            .Set("ButtonBorderBrushPointerOver", new SolidColorBrush(Colors.Transparent))
-                            .Set("ButtonBorderBrushPressed", new SolidColorBrush(Colors.Transparent)))
-                        .AutomationName("Remove attachment")
-                        .Grid(row: 0, column: 2)
-                )
-            ).Padding(8, 4, 8, 4)
-             .CornerRadius(6)
-             .Set(b =>
-             {
-                 b.Background = (Brush)Microsoft.UI.Xaml.Application.Current.Resources["CardBackgroundFillColorDefaultBrush"];
-                 b.BorderThickness = new Thickness(1);
-                 b.BorderBrush = (Brush)Microsoft.UI.Xaml.Application.Current.Resources["CardStrokeColorDefaultBrush"];
-             })
-             .Margin(0, 0, 0, 4);
+                    .Set(b =>
+                    {
+                        b.Width = 22;
+                        b.Height = 22;
+                        b.MinWidth = 0; b.MinHeight = 0;
+                        b.Padding = new Thickness(0);
+                        b.CornerRadius = new CornerRadius(11);
+                        b.BorderThickness = new Thickness(1);
+                    })
+                    .Resources(r => r
+                        .Set("ButtonBackground", Ref("SolidBackgroundFillColorBaseBrush"))
+                        .Set("ButtonBackgroundPointerOver", Ref("SolidBackgroundFillColorTertiaryBrush"))
+                        .Set("ButtonBackgroundPressed", Ref("SolidBackgroundFillColorQuarternaryBrush"))
+                        .Set("ButtonForeground", Ref("TextFillColorPrimaryBrush"))
+                        .Set("ButtonForegroundPointerOver", Ref("TextFillColorPrimaryBrush"))
+                        .Set("ButtonForegroundPressed", Ref("TextFillColorPrimaryBrush"))
+                        .Set("ButtonBorderBrush", Ref("CardStrokeColorDefaultBrush"))
+                        .Set("ButtonBorderBrushPointerOver", Ref("CardStrokeColorDefaultBrush"))
+                        .Set("ButtonBorderBrushPressed", Ref("CardStrokeColorDefaultBrush")))
+                    .AutomationName("Remove attachment")
+                    .HAlign(HorizontalAlignment.Right)
+                    .VAlign(VerticalAlignment.Top)
+                    .Margin(0, -8, -8, 0);
+
+                // Stack the close button on top of the thumbnail in the same
+                // Grid cell. Auto sizing means the chip is exactly as wide as
+                // the thumbnail.
+                var thumbWithClose = Grid(
+                    [GridSize.Auto], [GridSize.Auto],
+                    thumb.Grid(row: 0, column: 0),
+                    floatingRemove.Grid(row: 0, column: 0)
+                ).HAlign(HorizontalAlignment.Left);
+
+                attachmentPreview = Border(thumbWithClose)
+                    .Padding(8, 12, 8, 4);
+            }
+            else
+            {
+                attachmentPreview = Border(
+                    Grid([GridSize.Auto, GridSize.Star(), GridSize.Auto], [GridSize.Auto],
+                        TextBlock("\uE8A5") // Page glyph
+                            .Set(t =>
+                            {
+                                t.FontFamily = new FontFamily("Segoe Fluent Icons");
+                                t.FontSize = 12;
+                                t.VerticalAlignment = VerticalAlignment.Center;
+                            })
+                            .Grid(row: 0, column: 0),
+                        TextBlock($"{att.FileName}  ({att.FormatSize()})")
+                            .Set(t =>
+                            {
+                                t.FontSize = 12;
+                                t.TextTrimming = TextTrimming.CharacterEllipsis;
+                                t.VerticalAlignment = VerticalAlignment.Center;
+                                t.Margin = new Thickness(6, 0, 0, 0);
+                            })
+                            .Grid(row: 0, column: 1),
+                        removeBtn.Grid(row: 0, column: 2)
+                    )
+                ).Padding(4, 4, 4, 0);
+            }
         }
+
+        // Composer "card" — wraps the attachment preview (if any) and the
+        // textbox in a single bordered container so the preview reads as
+        // content inside the chat input rather than a separate row.
+        var composerInput = Border(
+            VStack(0, attachmentPreview, textbox)
+        ).Set(b =>
+        {
+            b.Background = (Brush)Microsoft.UI.Xaml.Application.Current.Resources["TextControlBackground"];
+            if (recording)
+            {
+                b.BorderBrush = (Brush)Microsoft.UI.Xaml.Application.Current.Resources["AccentFillColorDefaultBrush"];
+                b.BorderThickness = new Thickness(2);
+            }
+            else
+            {
+                b.BorderBrush = (Brush)Microsoft.UI.Xaml.Application.Current.Resources["TextControlBorderBrush"];
+                b.BorderThickness = new Thickness(1);
+            }
+            b.CornerRadius = composerCornerRadius;
+        });
 
         // ── Voice recording indicator: compact pill with dot, label, and mini waveform ──
         // Only shown while actively recording (isRecording state).
@@ -744,7 +944,7 @@ public sealed class OpenClawComposer : Component<OpenClawComposerProps>
                 workingBanner,
                 permissionBanner,
                 Border(
-                    VStack(8, textbox, attachmentChip, bottomRow)
+                    VStack(8, composerInput, bottomRow)
                 ).Padding(16, 12, 16, 12)
                  .Set(b =>
                  {
@@ -769,7 +969,7 @@ public sealed class OpenClawComposer : Component<OpenClawComposerProps>
             workingBanner2,
             permissionBanner2,
             Border(
-                VStack(8, dropdownsRow, textbox, voiceIndicator, attachmentChip, actionsRow)
+                VStack(8, dropdownsRow, composerInput, voiceIndicator, actionsRow.Margin(0, -8, 0, -4))
             ).Padding(16, 12, 16, 12)
              .Set(b =>
              {
@@ -782,4 +982,84 @@ public sealed class OpenClawComposer : Component<OpenClawComposerProps>
 
     private static string NonEmptyGlyph(string? glyph, string fallback)
         => string.IsNullOrEmpty(glyph) ? fallback : glyph!;
+
+    /// <summary>
+    /// Synchronously builds a <see cref="Microsoft.UI.Xaml.Media.Imaging.BitmapImage"/>
+    /// from a base64-encoded image payload (PNG/JPEG/etc.). Returns
+    /// <c>null</c> if the base64 string can't be decoded or the bitmap can't
+    /// be initialized — callers should fall back to a glyph in that case.
+    /// </summary>
+    private static Microsoft.UI.Xaml.Media.Imaging.BitmapImage? TryCreateBitmapFromBase64(string base64)
+    {
+        try
+        {
+            var bytes = Convert.FromBase64String(base64);
+            var stream = new global::Windows.Storage.Streams.InMemoryRandomAccessStream();
+            using (var writer = new global::Windows.Storage.Streams.DataWriter(stream))
+            {
+                writer.WriteBytes(bytes);
+                writer.StoreAsync().AsTask().GetAwaiter().GetResult();
+                writer.DetachStream();
+            }
+            stream.Seek(0);
+            var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+            bmp.SetSource(stream);
+            return bmp;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// If the clipboard contains a bitmap, reads it, re-encodes as PNG, and
+    /// returns a <see cref="ChatAttachment"/>. Returns <c>null</c> if no
+    /// bitmap is present or the bitmap exceeds <see cref="ChatAttachment.MaxSizeBytes"/>.
+    /// </summary>
+    private static async Task<ChatAttachment?> TryReadImageFromClipboardAsync()
+    {
+        var content = global::Windows.ApplicationModel.DataTransfer.Clipboard.GetContent();
+        if (content is null) return null;
+        if (!content.Contains(global::Windows.ApplicationModel.DataTransfer.StandardDataFormats.Bitmap))
+            return null;
+
+        var streamRef = await content.GetBitmapAsync();
+        using var inStream = await streamRef.OpenReadAsync();
+
+        // Decode then re-encode as PNG so the gateway always receives a
+        // self-describing image (clipboard bitmaps on Windows are often raw
+        // CF_DIB and lack a recognizable container).
+        var decoder = await global::Windows.Graphics.Imaging.BitmapDecoder.CreateAsync(inStream);
+        var softwareBitmap = await decoder.GetSoftwareBitmapAsync();
+
+        var outStream = new global::Windows.Storage.Streams.InMemoryRandomAccessStream();
+        var encoder = await global::Windows.Graphics.Imaging.BitmapEncoder.CreateAsync(
+            global::Windows.Graphics.Imaging.BitmapEncoder.PngEncoderId, outStream);
+        encoder.SetSoftwareBitmap(softwareBitmap);
+        await encoder.FlushAsync();
+
+        var size = (long)outStream.Size;
+        if (size > ChatAttachment.MaxSizeBytes)
+            return null;
+
+        outStream.Seek(0);
+        var buffer = new byte[size];
+        using (var reader = new global::Windows.Storage.Streams.DataReader(outStream.GetInputStreamAt(0)))
+        {
+            await reader.LoadAsync((uint)size);
+            reader.ReadBytes(buffer);
+        }
+
+        // Use a timestamp filename — clipboard bitmaps have no original name.
+        var fileName = $"pasted-image-{DateTime.Now:yyyyMMdd-HHmmss}.png";
+        return new ChatAttachment
+        {
+            Type = "image",
+            MimeType = "image/png",
+            FileName = fileName,
+            Content = Convert.ToBase64String(buffer),
+            SizeBytes = size
+        };
+    }
 }
