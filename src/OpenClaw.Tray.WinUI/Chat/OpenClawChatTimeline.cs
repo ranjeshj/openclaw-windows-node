@@ -1402,16 +1402,15 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
 
                     if (nested)
                     {
-                        // Inside the assistant bubble: stretch to bubble
-                        // content width. No MaxWidth, no Width binding —
-                        // the parent bubble's content area sizes us. The
-                        // MinWidth floor mirrors the external mode so a
-                        // narrow assistant bubble (e.g. "Done.") doesn't
-                        // crush the 5-column header grid (chevron / ⚡ /
-                        // label / summary / status pill) and clip the
-                        // status pill at the rounded right corner. The
-                        // bubble grows to fit if its text is shorter.
-                        b.MinWidth = 360;
+                        // Inside the assistant bubble: stretch to bubble's
+                        // content width — exactly 100%. No MinWidth, no
+                        // MaxWidth, no margin. The bubble's Padding already
+                        // creates the visual inset from the rounded corners,
+                        // and the headerRow's own Padding insets the Done
+                        // pill from this card's edge. Anything extra (like
+                        // MinWidth=360 we tried before) would force the
+                        // card wider than the bubble in narrow viewports
+                        // and push the pill past the bubble's right edge.
                         b.HorizontalAlignment = HorizontalAlignment.Stretch;
                         return;
                     }
@@ -1471,8 +1470,18 @@ public class OpenClawChatTimeline : Component<OpenClawChatTimelineProps>
             // sides). In external mode the card is anchored to toolLeftMargin
             // so its right edge stays parallel to the bubble's, with 6/6
             // vertical breathing room and the gutter on the right.
+            // Nested mode: pull the card in from the assistant bubble's
+            // rounded corner so the bubble's CornerRadius arc doesn't clip
+            // the card's right edge (and the Done pill inside it). The
+            // bubble's content area is rectangular only when bubblePadding
+            // ≥ bubbleRadius — when they're equal (Cozy preset: 16/16) the
+            // bottom-right corner arc reaches the content edge and the
+            // status pill gets visually truncated to "Do…". A full
+            // bubbleRadius inset (≈16) keeps the card and pill safely
+            // outside the arc on both sides.
+            var nestedSideInset = (int)Math.Round(bubbleRadius.TopLeft);
             Element Wrap(Element card) => nested
-                ? card.HAlign(HorizontalAlignment.Stretch)
+                ? card.HAlign(HorizontalAlignment.Stretch).Margin(0, 0, nestedSideInset, 0)
                 : AnchorLeft(card).HAlign(HorizontalAlignment.Stretch).Margin(toolLeftMargin, 6, gutter, 6);
 
             // Wrap the card in a left-anchored single-Star Grid so the card
