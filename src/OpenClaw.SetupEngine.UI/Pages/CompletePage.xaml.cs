@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
+using OpenClaw.SetupEngine;
 using Windows.UI;
 
 namespace OpenClaw.SetupEngine.UI.Pages;
@@ -101,13 +102,7 @@ public sealed partial class CompletePage : Page
     {
         try
         {
-            // Find tray exe path for startup registration
-            var candidates = new[]
-            {
-                Path.Combine(AppContext.BaseDirectory, "..", "OpenClaw.Tray.WinUI", "OpenClaw.Tray.WinUI.exe"),
-                Path.Combine(AppContext.BaseDirectory, "OpenClaw.Tray.WinUI.exe"),
-            };
-            var trayPath = candidates.FirstOrDefault(File.Exists);
+            var trayPath = TrayExecutableResolver.Resolve();
             if (trayPath == null) return;
 
             using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(

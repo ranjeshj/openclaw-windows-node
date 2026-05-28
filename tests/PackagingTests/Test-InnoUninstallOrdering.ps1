@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Packaging test — verifies that Inno Setup's [UninstallRun] entry for
+    Packaging test - verifies that Inno Setup's [UninstallRun] entry for
     Uninstall-LocalGateway.ps1 runs BEFORE {app} directory deletion.
 
 .DESCRIPTION
@@ -15,8 +15,9 @@
     1. [BUILD]    Require a pre-built Inno installer (.exe) via -InstallerPath, or
                   attempt to locate one in the expected build output path.
     2. [INSTALL]  Run the installer silently to a temp prefix directory.
-    3. [VERIFY]   Assert that {app}\OpenClaw.Tray.WinUI.exe and
-                  {app}\Uninstall-LocalGateway.ps1 both exist post-install.
+    3. [VERIFY]   Assert that {app}\OpenClaw.Tray.WinUI.exe,
+                  {app}\SetupEngine\OpenClaw.SetupEngine.UI.exe, and
+                  {app}\Uninstall-LocalGateway.ps1 all exist post-install.
     4. [UNINSTALL] Run unins000.exe /VERYSILENT /LOG=<logfile>.
     5. [PARSE LOG] Grep the Inno uninstall log for:
                    a) Evidence that Uninstall-LocalGateway.ps1 was invoked (or
@@ -153,7 +154,7 @@ function Add-Step {
         "Info"    { "Cyan"    }
         default   { "White"   }
     }
-    Write-Host "[$ts] [$Status] $Name — $Message" -ForegroundColor $color
+    Write-Host "[$ts] [$Status] $Name - $Message" -ForegroundColor $color
 }
 
 function Write-Info {
@@ -216,11 +217,11 @@ function Write-Results {
         default   { "Yellow" }
     }
     Write-Host ""
-    Write-Host "════════════════════════════════════════" -ForegroundColor $verdictColor
+    Write-Host "========================================" -ForegroundColor $verdictColor
     Write-Host "  VERDICT  : $Verdict"                    -ForegroundColor $verdictColor
     Write-Host "  ExitCode : $ExitCode"                   -ForegroundColor $verdictColor
     Write-Host "  Output   : $OutputDir"                  -ForegroundColor $verdictColor
-    Write-Host "════════════════════════════════════════" -ForegroundColor $verdictColor
+    Write-Host "========================================" -ForegroundColor $verdictColor
     Write-Host ""
 }
 
@@ -233,8 +234,8 @@ function Find-Installer {
         return $InstallerPath
     }
 
-    # Script is in tests\PackagingTests\ → repo root is 3 levels up
-    $repoRoot   = Split-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) -Parent
+    # Script is in tests\PackagingTests; repo root is 2 levels up.
+    $repoRoot   = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
     $candidates = @(
         (Join-Path $repoRoot "Output\OpenClawTray-Setup-x64.exe"),
         (Join-Path $repoRoot "installer-output\OpenClawTray-Setup-x64.exe"),
@@ -326,11 +327,11 @@ function Test-UninstallLogOrdering {
         dir_deleted           = $dirDeleted
         ordering_correct      = $orderingOk
         notes                 = if ($orderingOk) {
-                                    "hook at line $hookIdx < dir-delete at line $dirDelIdx — ordering CORRECT"
+                                    "hook at line $hookIdx < dir-delete at line $dirDelIdx - ordering CORRECT"
                                 } elseif (-not $hookRan) {
-                                    "hook entry not found in log — [UninstallRun] may not have run"
+                                    "hook entry not found in log - [UninstallRun] may not have run"
                                 } elseif (-not $dirDeleted) {
-                                    "dir-delete entry not found in log — check Inno verbosity"
+                                    "dir-delete entry not found in log - check Inno verbosity"
                                 } else {
                                     "ORDERING WRONG: hook at line $hookIdx >= dir-delete at line $dirDelIdx"
                                 }
@@ -370,10 +371,10 @@ $script:tempInstallPath = ""
 $script:appDirPattern  = ""
 
 Write-Host ""
-Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║   Test-InnoUninstallOrdering.ps1  (2026-05-07)              ║" -ForegroundColor Cyan
-Write-Host "║   Verifies [UninstallRun] hook runs BEFORE {app} deletion   ║" -ForegroundColor Cyan
-Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "==============================================================" -ForegroundColor Cyan
+Write-Host "  Test-InnoUninstallOrdering.ps1  (2026-05-07)"               -ForegroundColor Cyan
+Write-Host "  Verifies [UninstallRun] hook runs BEFORE {app} deletion"    -ForegroundColor Cyan
+Write-Host "==============================================================" -ForegroundColor Cyan
 Write-Host "  OutputDir : $OutputDir"
 Write-Host ""
 
@@ -382,7 +383,7 @@ $exitCode = $EXIT_ERROR
 try {
 
     # =====================================================================
-    # STEP 1 — Locate installer
+    # STEP 1 - Locate installer
     # =====================================================================
     $foundInstaller = Find-Installer
     if ([string]::IsNullOrEmpty($foundInstaller)) {
@@ -402,7 +403,7 @@ try {
     Write-Info "Installer: $foundInstaller"
 
     # =====================================================================
-    # STEP 2 — Create a temp install prefix
+    # STEP 2 - Create a temp install prefix
     # =====================================================================
     if ([string]::IsNullOrEmpty($TempInstallDir)) {
         $TempInstallDir = Join-Path $env:TEMP "InnoOrderingTest"
@@ -417,7 +418,7 @@ try {
     Write-Info "Temp install dir: $tempInstallPath"
 
     # =====================================================================
-    # STEP 3 — Silent install
+    # STEP 3 - Silent install
     # =====================================================================
     Write-Info "Running silent install..."
     $installLog    = Join-Path $OutputDir "install.log"
@@ -444,31 +445,57 @@ try {
     }
 
     # =====================================================================
-    # STEP 4 — Verify post-install file presence
+    # STEP 4 - Verify post-install file presence
     # =====================================================================
-    $exePath          = Join-Path $tempInstallPath "OpenClaw.Tray.WinUI.exe"
-    $hookScriptPath   = Join-Path $tempInstallPath "Uninstall-LocalGateway.ps1"
+    $exePath                        = Join-Path $tempInstallPath "OpenClaw.Tray.WinUI.exe"
+    $setupEngineExePath             = Join-Path $tempInstallPath "SetupEngine\OpenClaw.SetupEngine.UI.exe"
+    $setupEngineAppXbfPath          = Join-Path $tempInstallPath "SetupEngine\App.xbf"
+    $setupEngineWindowXbfPath       = Join-Path $tempInstallPath "SetupEngine\SetupWindow.xbf"
+    $setupEngineWelcomePageXbfPath  = Join-Path $tempInstallPath "SetupEngine\Pages\WelcomePage.xbf"
+    $setupEnginePriPath             = Join-Path $tempInstallPath "SetupEngine\OpenClaw.SetupEngine.UI.pri"
+    $hookScriptPath                 = Join-Path $tempInstallPath "Uninstall-LocalGateway.ps1"
 
-    $exeExists        = Test-Path -LiteralPath $exePath
-    $hookScriptExists = Test-Path -LiteralPath $hookScriptPath
+    $exeExists                      = Test-Path -LiteralPath $exePath
+    $setupEngineExeExists           = Test-Path -LiteralPath $setupEngineExePath
+    $setupEngineAppXbfExists        = Test-Path -LiteralPath $setupEngineAppXbfPath
+    $setupEngineWindowXbfExists     = Test-Path -LiteralPath $setupEngineWindowXbfPath
+    $setupEngineWelcomePageXbfExists = Test-Path -LiteralPath $setupEngineWelcomePageXbfPath
+    $setupEnginePriExists           = Test-Path -LiteralPath $setupEnginePriPath
+    $hookScriptExists               = Test-Path -LiteralPath $hookScriptPath
 
-    if (-not $exeExists -or -not $hookScriptExists) {
+    if (-not $exeExists -or
+        -not $setupEngineExeExists -or
+        -not $setupEngineAppXbfExists -or
+        -not $setupEngineWindowXbfExists -or
+        -not $setupEngineWelcomePageXbfExists -or
+        -not $setupEnginePriExists -or
+        -not $hookScriptExists) {
         Add-Step "verify-post-install-files" "Failed" "Expected files missing post-install." @{
-            "OpenClaw.Tray.WinUI.exe exists"    = $exeExists
-            "Uninstall-LocalGateway.ps1 exists" = $hookScriptExists
+            "OpenClaw.Tray.WinUI.exe exists"                   = $exeExists
+            "SetupEngine\\OpenClaw.SetupEngine.UI.exe exists"  = $setupEngineExeExists
+            "SetupEngine\\App.xbf exists"                      = $setupEngineAppXbfExists
+            "SetupEngine\\SetupWindow.xbf exists"              = $setupEngineWindowXbfExists
+            "SetupEngine\\Pages\\WelcomePage.xbf exists"       = $setupEngineWelcomePageXbfExists
+            "SetupEngine\\OpenClaw.SetupEngine.UI.pri exists"  = $setupEnginePriExists
+            "Uninstall-LocalGateway.ps1 exists"                = $hookScriptExists
         }
         Write-Results -Verdict "FAIL" -ExitCode $EXIT_FAIL `
-            -Notes "Post-install file check failed.  EXE=$exeExists  Hook=$hookScriptExists"
+            -Notes "Post-install file check failed. EXE=$exeExists SetupEngine=$setupEngineExeExists AppXbf=$setupEngineAppXbfExists WindowXbf=$setupEngineWindowXbfExists WelcomeXbf=$setupEngineWelcomePageXbfExists Pri=$setupEnginePriExists Hook=$hookScriptExists"
         exit $EXIT_FAIL
     }
 
-    Add-Step "verify-post-install-files" "Passed" "Both required files exist post-install." @{
-        exePath        = $exePath
-        hookScriptPath = $hookScriptPath
+    Add-Step "verify-post-install-files" "Passed" "Required tray, SetupEngine, WinUI resources, and uninstall files exist post-install." @{
+        exePath                       = $exePath
+        setupEngineExePath            = $setupEngineExePath
+        setupEngineAppXbfPath         = $setupEngineAppXbfPath
+        setupEngineWindowXbfPath      = $setupEngineWindowXbfPath
+        setupEngineWelcomePageXbfPath = $setupEngineWelcomePageXbfPath
+        setupEnginePriPath            = $setupEnginePriPath
+        hookScriptPath                = $hookScriptPath
     }
 
     # =====================================================================
-    # STEP 5 — Locate unins000.exe
+    # STEP 5 - Locate unins000.exe
     # =====================================================================
     $uninsExe = Join-Path $tempInstallPath "unins000.exe"
     if (-not (Test-Path -LiteralPath $uninsExe)) {
@@ -485,7 +512,7 @@ try {
     Add-Step "locate-uninstaller" "Passed" "Uninstaller: $uninsExe"
 
     # =====================================================================
-    # STEP 6 — Silent uninstall with log capture
+    # STEP 6 - Silent uninstall with log capture
     # =====================================================================
     $uninstallLog  = Join-Path $OutputDir "uninstall.log"
     $uninstallArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
@@ -511,7 +538,7 @@ try {
     }
 
     # =====================================================================
-    # STEP 7 — Parse log: verify hook ran AND ordering is correct
+    # STEP 7 - Parse log: verify hook ran AND ordering is correct
     # =====================================================================
     Write-Info "Parsing uninstall log for ordering evidence..."
     $ordering = Test-UninstallLogOrdering -LogPath $uninstallLog
@@ -535,7 +562,7 @@ try {
     }
 
     # =====================================================================
-    # STEP 7b — Supplemental: verify {app} dir was deleted after uninstall
+    # STEP 7b - Supplemental: verify {app} dir was deleted after uninstall
     # =====================================================================
     $appDirGone = -not (Test-Path -LiteralPath $tempInstallPath)
     if ($appDirGone) {
@@ -546,12 +573,12 @@ try {
     }
 
     # =====================================================================
-    # STEP 8 — WSL cleanup check
+    # STEP 8 - WSL cleanup check
     # =====================================================================
     Invoke-WslCleanupCheck
 
     # =====================================================================
-    # STEP 9 — Final verdict
+    # STEP 9 - Final verdict
     # =====================================================================
 
     # Determine if the log ordering check was conclusive.
@@ -618,7 +645,7 @@ finally {
                 Write-Info "Temp install dir removed: $($script:tempInstallPath)"
             }
             catch {
-                Write-Info "Warning: could not remove temp dir: $($script:tempInstallPath) — $($_.Exception.Message)"
+                Write-Info "Warning: could not remove temp dir: $($script:tempInstallPath) - $($_.Exception.Message)"
             }
         }
     }

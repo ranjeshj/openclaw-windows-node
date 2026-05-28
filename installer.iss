@@ -87,4 +87,4 @@ Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""Add-
 ; runhidden suppresses the console window that would otherwise flash briefly.
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\Uninstall-LocalGateway.ps1"""; Flags: shellexec waituntilterminated runhidden; StatusMsg: "Removing local WSL gateway..."
 ; Unregister Command Palette extension on uninstall
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""Get-AppxPackage -Name '*OpenClaw*' | Remove-AppxPackage"""; Flags: runhidden
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Get-AppxPackage -Name 'OpenClaw' -ErrorAction SilentlyContinue | Remove-AppxPackage -ErrorAction SilentlyContinue"""; Flags: waituntilterminated runhidden; RunOnceId: "remove-command-palette-package"

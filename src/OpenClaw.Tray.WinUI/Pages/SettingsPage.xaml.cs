@@ -300,7 +300,7 @@ public sealed partial class SettingsPage : Page
         try
         {
             var setupExe = App.ResolveSetupEngineUiPath()
-                ?? throw new FileNotFoundException("SetupEngine.UI not found (searched app dir and sibling project output)");
+                ?? throw new FileNotFoundException($"SetupEngine.UI not found at {App.GetExpectedSetupEngineUiPath()}");
 
             jsonOutput = Path.Combine(Path.GetTempPath(), $"openclaw-uninstall-{Guid.NewGuid():N}.json");
 

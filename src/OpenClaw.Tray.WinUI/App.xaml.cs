@@ -2924,22 +2924,17 @@ public partial class App : Application, OpenClawTray.Services.IAppCommands
     }
 
     /// <summary>
-    /// Resolves the SetupEngine.UI executable path.
-    /// Checks <c>{AppDir}/SetupEngine/OpenClaw.SetupEngine.UI.exe</c> (standard layout)
-    /// and <c>{AppDir}/OpenClaw.SetupEngine.UI.exe</c> (flat/legacy layout).
+    /// Returns the canonical SetupEngine.UI path in the unpackaged layout:
+    /// <c>{AppDir}/SetupEngine/OpenClaw.SetupEngine.UI.exe</c>.
     /// </summary>
-    internal static string? ResolveSetupEngineUiPath()
+    internal static string GetExpectedSetupEngineUiPath(string? appBaseDirectory = null)
     {
-        const string exeName = "OpenClaw.SetupEngine.UI.exe";
-
-        // Standard layout: SetupEngine subfolder (build.ps1 copies here, installer deploys here)
-        var subDir = Path.Combine(AppContext.BaseDirectory, "SetupEngine", exeName);
-        if (File.Exists(subDir)) return subDir;
-
-        // Flat layout fallback (e.g. everything in one folder)
-        var flat = Path.Combine(AppContext.BaseDirectory, exeName);
-        return File.Exists(flat) ? flat : null;
+        appBaseDirectory ??= AppContext.BaseDirectory;
+        return Path.Combine(appBaseDirectory, "SetupEngine", "OpenClaw.SetupEngine.UI.exe");
     }
+
+    internal static string? ResolveSetupEngineUiPath()
+        => File.Exists(GetExpectedSetupEngineUiPath()) ? GetExpectedSetupEngineUiPath() : null;
 
     [DllImport("user32.dll")]
     private static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -2977,7 +2972,7 @@ public partial class App : Application, OpenClawTray.Services.IAppCommands
         var setupExePath = ResolveSetupEngineUiPath();
         if (setupExePath == null)
         {
-            Logger.Error($"SetupEngine.UI not found (searched {AppContext.BaseDirectory} and sibling project output)");
+            Logger.Error($"SetupEngine.UI not found at {GetExpectedSetupEngineUiPath()}");
             return;
         }
 

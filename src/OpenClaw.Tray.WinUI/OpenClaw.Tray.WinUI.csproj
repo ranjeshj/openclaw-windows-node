@@ -244,4 +244,24 @@
     <Copy SourceFiles="$(WebView2LoaderSource)" DestinationFolder="$(OutputPath)" SkipUnchangedFiles="true" Condition="Exists('$(WebView2LoaderSource)')" />
   </Target>
 
+  <PropertyGroup>
+    <OpenClawSetupEngineProject>$(MSBuildThisFileDirectory)..\OpenClaw.SetupEngine.UI\OpenClaw.SetupEngine.UI.csproj</OpenClawSetupEngineProject>
+    <OpenClawSetupEngineOutputDirectory>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\OpenClaw.SetupEngine.UI\bin\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\'))</OpenClawSetupEngineOutputDirectory>
+  </PropertyGroup>
+
+  <Target Name="StageSetupEngineIntoTrayLayout"
+          AfterTargets="Build"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(PackageMsix)' != 'true' and '$(RuntimeIdentifier)' != ''">
+    <MSBuild Projects="$(OpenClawSetupEngineProject)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);Platform=$(Platform)" />
+    <ItemGroup>
+      <_SetupEngineLayoutFiles Include="$(OpenClawSetupEngineOutputDirectory)**\*" />
+    </ItemGroup>
+    <MakeDir Directories="$(TargetDir)SetupEngine" />
+    <Copy SourceFiles="@(_SetupEngineLayoutFiles)"
+          DestinationFiles="@(_SetupEngineLayoutFiles->'$(TargetDir)SetupEngine\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

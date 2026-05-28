@@ -43,7 +43,7 @@ internal static class CliUninstallHandler
         var setupExe = App.ResolveSetupEngineUiPath();
         if (setupExe == null)
         {
-            Console.Error.WriteLine($"ERROR: SetupEngine.UI not found (searched {AppContext.BaseDirectory} and sibling project output)");
+            Console.Error.WriteLine($"ERROR: SetupEngine.UI not found at {App.GetExpectedSetupEngineUiPath()}");
             Environment.Exit(1);
             return;
         }

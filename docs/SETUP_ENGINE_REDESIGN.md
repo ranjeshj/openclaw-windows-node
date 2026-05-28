@@ -328,11 +328,11 @@ Uses the bundled default config when no explicit `--config` is supplied.
 # Build headless engine
 dotnet build src\OpenClaw.SetupEngine\OpenClaw.SetupEngine.csproj
 
-# Build UI app (requires Platform specification)
-dotnet build src\OpenClaw.SetupEngine.UI\OpenClaw.SetupEngine.UI.csproj -p:Platform=x64
+# Build the tray app (this also stages SetupEngine.UI into the tray's SetupEngine\ folder)
+dotnet build src\OpenClaw.Tray.WinUI\OpenClaw.Tray.WinUI.csproj -p:Platform=x64
 
-# Run UI
-Start-Process "src\OpenClaw.SetupEngine.UI\bin\x64\Debug\net10.0-windows10.0.22621.0\win-x64\OpenClaw.SetupEngine.UI.exe"
+# Run UI from the staged production-style layout
+Start-Process "src\OpenClaw.Tray.WinUI\bin\Debug\net10.0-windows10.0.22621.0\win-x64\SetupEngine\OpenClaw.SetupEngine.UI.exe"
 
 # Run headless
 & "src\OpenClaw.SetupEngine\bin\Debug\net10.0\OpenClaw.SetupEngine.exe"

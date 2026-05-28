@@ -360,6 +360,7 @@ jobs:
         certificate-profile-name: WindowsEdgeLight
         files-folder: publish
         files-folder-filter: exe
+        files-folder-recurse: true
         file-digest: SHA256
         timestamp-rfc3161: http://timestamp.acs.microsoft.com
         timestamp-digest: SHA256
@@ -580,6 +581,7 @@ jobs:
         certificate-profile-name: WindowsEdgeLight
         files-folder: artifacts/tray-win-arm64
         files-folder-filter: exe
+        files-folder-recurse: true
         file-digest: SHA256
         timestamp-rfc3161: http://timestamp.acs.microsoft.com
         timestamp-digest: SHA256
